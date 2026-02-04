@@ -21,7 +21,7 @@ load_dotenv()
 
 # Konfiguration Logging
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG für detaillierte Ausgabe
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -124,12 +124,8 @@ def get_current_map(server) -> Tuple[str, str]:
         response.raise_for_status()
         result = response.json()
         
-        # Debug: Zeige die komplette API-Antwort
-        logger.debug(f"[{server['name']}] get_map full response: {result}")
-        
         # Versuche result zu extrahieren
         data = result.get("result", result)
-        logger.debug(f"[{server['name']}] data after result extraction: {data}")
         
         # Map-Name aus verschiedenen möglichen Feldern extrahieren
         current_map = None
@@ -148,17 +144,15 @@ def get_current_map(server) -> Tuple[str, str]:
             current_map = data
         
         if not current_map or current_map == "Unknown":
-            logger.warning(f"[{server['name']}] Konnte Map nicht extrahieren. Data: {data}")
+            logger.warning(f"[{server['name']}] Konnte Map nicht extrahieren.")
             current_map = "Unknown"
         
         # Verwende Map-Name als Match-ID
         match_id = current_map
         
-        logger.info(f"[{server['name']}] Aktuelle Map: {current_map}")
-        
         return current_map, match_id
     except Exception as e:
-        logger.error(f"Fehler beim Abrufen der Map von {server['name']}: {e}", exc_info=True)
+        logger.error(f"Fehler beim Abrufen der Map von {server['name']}: {e}")
         return "Unknown", None
 
 
