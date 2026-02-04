@@ -374,8 +374,15 @@ async def process_server(server, channel):
     # Hole Live Game Stats
     live_stats = get_live_game_stats(server)
     
+    logger.info(f"[{server['name']}] Live Stats Keys: {list(live_stats.keys()) if live_stats else 'None'}")
+    logger.info(f"[{server['name']}] Player Count: {len(live_stats.get('player_stats', {})) if live_stats else 0}")
+    
     if not live_stats or "player_stats" not in live_stats:
+        logger.warning(f"[{server['name']}] Keine player_stats in Response!")
         return
+    
+    # WICHTIG: Reset match_kills VOR dem Update, um alte Daten zu löschen
+    state["match_kills"].clear()
     
     # Verarbeite Spieler-Stats
     player_stats = live_stats.get("player_stats", {})
@@ -389,8 +396,9 @@ async def process_server(server, channel):
         
         # Update nur wenn Spieler Kills hat
         if kills > 0:
-            state["match_kills"][steam_id]["name"] = player_name
-            state["match_kills"][steam_id]["kills"] = kills
+            state["match_kills"][steam_id] = {"name": player_name, "kills": kills}
+            
+    logger.info(f"[{server['name']}] Verarbeitete Spieler: {len(state['match_kills'])}")
 
 
 @tasks.loop(seconds=30)
