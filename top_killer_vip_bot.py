@@ -87,8 +87,6 @@ for server in servers:
 # Server States
 server_states = {
     server["base_url"]: {
-        "last_max_id": 0,
-        "seen_log_ids": set(),
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
         "match_start": None,
@@ -116,20 +114,18 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def get_historical_logs(server, limit=500) -> List[Dict]:
-    """Hole historische Logs vom Server"""
+def get_live_game_stats(server) -> Dict:
+    """Hole Live-Game-Stats für das aktuelle Match"""
     try:
-        payload = {"limit": limit}
-        response = server["session"].post(
-            f"{server['base_url']}/api/get_historical_logs",
-            json=payload,
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_live_game_stats",
             timeout=15
         )
         response.raise_for_status()
-        return response.json().get("result", [])
+        return response.json().get("result", {})
     except Exception as e:
-        logger.error(f"Fehler beim Abrufen der Logs von {server['name']}: {e}")
-        return []
+        logger.error(f"Fehler beim Abrufen der Live-Stats von {server['name']}: {e}")
+        return {}
 
 
 def get_current_map(server) -> Tuple[str, str]:
@@ -353,7 +349,7 @@ async def process_match_end(server, state: Dict, channel):
 
 
 async def process_server(server, channel):
-    """Verarbeite Logs für einen Server"""
+    """Verarbeite Stats für einen Server"""
     state = server_states[server["base_url"]]
     
     # Hole aktuelle Map/Match
@@ -375,38 +371,26 @@ async def process_server(server, channel):
         state["live_message"] = None
         state["last_update"] = None
     
-    # Hole Logs
-    logs = get_historical_logs(server)
-    if not logs:
+    # Hole Live Game Stats
+    live_stats = get_live_game_stats(server)
+    
+    if not live_stats or "player_stats" not in live_stats:
         return
     
-    # Filtere neue Logs
-    new_logs = [log for log in logs if log.get("id", 0) > state["last_max_id"]]
+    # Verarbeite Spieler-Stats
+    player_stats = live_stats.get("player_stats", {})
     
-    if new_logs:
-        state["last_max_id"] = max(log.get("id", 0) for log in logs)
-    
-    # Verarbeite neue Logs
-    for log in reversed(new_logs):
-        log_id = log.get("id")
-        if log_id in state["seen_log_ids"]:
+    for steam_id, stats in player_stats.items():
+        if not steam_id or steam_id == "None":
             continue
-        state["seen_log_ids"].add(log_id)
-        
-        log_type = log.get("type", "").upper()
-        
-        # Nur reguläre Kills zählen
-        if "KILL" in log_type and "TEAM KILL" not in log_type:
-            killer_id = log.get("player1_id")
-            killer_name = log.get("player1_name") or "Unknown"
             
-            if killer_id:
-                state["match_kills"][killer_id]["name"] = killer_name
-                state["match_kills"][killer_id]["kills"] += 1
-    
-    # Cleanup alte IDs
-    if len(state["seen_log_ids"]) > 3000:
-        state["seen_log_ids"] = set(list(state["seen_log_ids"])[-1500:])
+        player_name = stats.get("player", "Unknown")
+        kills = stats.get("kills", 0)
+        
+        # Update nur wenn Spieler Kills hat
+        if kills > 0:
+            state["match_kills"][steam_id]["name"] = player_name
+            state["match_kills"][steam_id]["kills"] = kills
 
 
 @tasks.loop(seconds=30)
