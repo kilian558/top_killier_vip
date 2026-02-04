@@ -389,16 +389,26 @@ async def process_server(server, channel):
     players = []
     
     if isinstance(scoreboard, dict):
-        # Wenn es ein Dict ist, könnte es die Spieler direkt enthalten (steam_id als key)
-        # oder ein "players" key haben
-        if "players" in scoreboard:
+        logger.info(f"[{server['name']}] Scoreboard-Keys: {list(scoreboard.keys())}")
+        
+        # Häufige Formate: team-Keys mit Listen
+        for team_key in ("allied", "axis", "team1", "team2"):
+            team_players = scoreboard.get(team_key)
+            if isinstance(team_players, list):
+                players.extend(team_players)
+        
+        # Alternativ: players-Array
+        if not players and isinstance(scoreboard.get("players"), list):
             players = scoreboard.get("players", [])
-        else:
-            # Dict mit steam_id als keys
+        
+        # Alternativ: Dict mit steam_id als Keys
+        if not players:
             for steam_id, data in scoreboard.items():
                 if isinstance(data, dict):
                     data["player_id"] = steam_id  # Füge player_id hinzu falls nicht vorhanden
                     players.append(data)
+                elif isinstance(data, list):
+                    players.extend([p for p in data if isinstance(p, dict)])
     elif isinstance(scoreboard, list):
         players = scoreboard
     
