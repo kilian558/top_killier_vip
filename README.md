@@ -1,14 +1,16 @@
 # 🎯 Top Killer VIP Bot für Hell Let Loose
 
-Automatischer Bot, der während eines Matches die Kills trackt und den **Top 3 Killern ohne VIP** automatisch **+24 Stunden VIP** vergibt.
+Automatischer Bot, der während eines Matches die Kills trackt und den **Top 5 Killern ohne VIP** automatisch **gestaffelte VIP-Belohnungen** vergibt.
 
 ## ✨ Features
 
 - ✅ **Match-basierte Kill-Tracking**: Zählt Kills während eines laufenden Matches
-- ✅ **Top 3 Belohnung**: Die besten 3 Killer **ohne VIP** bekommen automatisch +24h VIP
+- ✅ **Top 5 Belohnung**: Die besten 5 Killer **ohne VIP** bekommen gestaffelte VIP-Zeiten:
+  - 🥇 **Platz 1**: +72 Stunden VIP
+  - 🥈 **Platz 2**: +48 Stunden VIP
+  - 🥉 **Platz 3-5**: +24 Stunden VIP
 - ✅ **Multi-Server Support**: Überwacht bis zu 3 Server gleichzeitig
-- ✅ **Discord Logs**: Sendet Benachrichtigungen über Match-Starts und VIP-Vergabe
-- ✅ **Ingame-Nachrichten**: Belohnte Spieler erhalten eine PM im Spiel
+- ✅ **Discord Logs**: Sendet detaillierte Benachrichtigungen über Match-Starts und VIP-Vergabe
 - ✅ **PM2-Ready**: Einfaches Deployment und automatischer Restart
 - ✅ **Graceful Shutdown**: Sauberes Beenden bei Systemsignalen
 
@@ -116,11 +118,13 @@ Während des Matches werden alle regulären Kills gezählt:
 
 ### 3. Match-Ende
 Beim Wechsel zur nächsten Map:
-1. Bot ermittelt die Top 3 Killer
+1. Bot ermittelt die Top 5 Killer
 2. Prüft, welche davon **kein VIP** haben
-3. Vergibt diesen Spielern **+24h VIP**
-4. Sendet ihnen eine **Ingame-Nachricht**
-5. Postet **Discord-Log** mit Ergebnissen
+3. Vergibt diesen Spielern **gestaffelte VIP-Zeiten**:
+   - 🥇 Platz 1: +72 Stunden
+   - 🥈 Platz 2: +48 Stunden
+   - 🥉 Platz 3-5: +24 Stunden
+4. Postet **Discord-Log** mit Ergebnissen
 
 ### 4. Discord-Benachrichtigungen
 
@@ -135,16 +139,22 @@ Map: Carentan
 🏆 Match beendet auf Server 1
 Map: Carentan
 
-Top 3 Killer ohne VIP erhalten +24h VIP:
-✓ #1 SpielerName1 - 45 Kills
-✓ #2 SpielerName2 - 38 Kills
-✓ #3 SpielerName3 - 34 Kills
+Top 5 Killer ohne VIP erhalten VIP-Belohnungen:
+🥇 Platz 1: +72 Stunden | 🥈 Platz 2: +48 Stunden | 🥉 Platz 3-5: +24 Stunden
+
+✓ 🥇 SpielerName1 - 45 Kills → +72h VIP
+✓ 🥈 SpielerName2 - 38 Kills → +48h VIP
+✓ 🥉 SpielerName3 - 34 Kills → +24h VIP
+✓ 4️⃣ SpielerName4 - 30 Kills → +24h VIP
+✓ 5️⃣ SpielerName5 - 28 Kills → +24h VIP
 
 Top 10 Gesamt:
 1. SpielerName1 - 45 Kills
 2. SpielerName2 - 38 Kills
 3. SpielerName3 - 34 Kills
-4. SpielerMitVIP - 32 Kills 👑
+4. SpielerName4 - 30 Kills
+5. SpielerName5 - 28 Kills
+6. SpielerMitVIP - 26 Kills 👑
 ...
 ```
 
@@ -184,11 +194,14 @@ logging.basicConfig(
 
 ## ❓ FAQ
 
-**Q: Bekommen Spieler mit VIP auch +24h?**  
+**Q: Bekommen Spieler mit VIP auch VIP-Verlängerung?**  
 A: Nein, nur Spieler **ohne VIP** bekommen die Belohnung.
 
 **Q: Was passiert, wenn ein Top-Killer Lifetime-VIP hat?**  
 A: Er wird übersprungen, der nächste Killer ohne VIP rückt nach.
+
+**Q: Wie sind die VIP-Zeiten gestaffelt?**  
+A: Platz 1 erhält 72h, Platz 2 erhält 48h, Plätze 3-5 erhalten jeweils 24h VIP.
 
 **Q: Werden Teamkills gezählt?**  
 A: Nein, nur reguläre Kills zählen für das Ranking.
@@ -199,8 +212,8 @@ A: Alle 5 Sekunden werden die Logs abgefragt.
 **Q: Was passiert bei Bot-Neustart während eines Matches?**  
 A: Die Kills des aktuellen Matches gehen verloren. Der Bot startet die Zählung beim nächsten Match neu.
 
-**Q: Kann ich die Top 3 auf Top 5 ändern?**  
-A: Ja, in `top_killer_vip.py` Zeile 227 ändere `[:3]` zu `[:5]`.
+**Q: Kann ich die VIP-Zeiten anpassen?**  
+A: Ja, in `top_killer_vip.py` in der Funktion `process_match_end()` kannst du das Dictionary `vip_hours` anpassen (z.B. `{1: 96, 2: 72, 3: 48, 4: 24, 5: 24}`).
 
 ## 🐛 Troubleshooting
 
