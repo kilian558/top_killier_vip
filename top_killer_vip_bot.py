@@ -114,7 +114,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def get_live_scoreboard(server) -> List:
+def get_live_scoreboard(server):
     """Hole Live-Scoreboard für aktuell verbundene Spieler"""
     try:
         response = server["session"].get(
@@ -123,10 +123,7 @@ def get_live_scoreboard(server) -> List:
         )
         response.raise_for_status()
         result = response.json().get("result", [])
-        # result sollte eine Liste von Spielern sein
-        if not isinstance(result, list):
-            logger.warning(f"[{server['name']}] Scoreboard ist keine Liste: {type(result)}")
-            return []
+        # result kann Liste oder Dict sein
         return result
     except Exception as e:
         logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
@@ -387,9 +384,27 @@ async def process_server(server, channel):
     state["match_kills"].clear()
     
     # Verarbeite Spieler-Stats
-    # Scoreboard ist eine Liste von Spieler-Objekten
+    # Scoreboard kann ein Dict oder eine Liste sein
     player_count = 0
-    for player in scoreboard:
+    players = []
+    
+    if isinstance(scoreboard, dict):
+        # Wenn es ein Dict ist, könnte es die Spieler direkt enthalten (steam_id als key)
+        # oder ein "players" key haben
+        if "players" in scoreboard:
+            players = scoreboard.get("players", [])
+        else:
+            # Dict mit steam_id als keys
+            for steam_id, data in scoreboard.items():
+                if isinstance(data, dict):
+                    data["player_id"] = steam_id  # Füge player_id hinzu falls nicht vorhanden
+                    players.append(data)
+    elif isinstance(scoreboard, list):
+        players = scoreboard
+    
+    logger.info(f"[{server['name']}] Anzahl Spieler im Scoreboard: {len(players)}")
+    
+    for player in players:
         if not isinstance(player, dict):
             continue
             
@@ -405,7 +420,7 @@ async def process_server(server, channel):
             state["match_kills"][steam_id] = {"name": player_name, "kills": kills}
             player_count += 1
             
-    logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(scoreboard)}")
+    logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(players)}")
 
 
 @tasks.loop(seconds=10)
