@@ -418,8 +418,10 @@ async def update_live_stats():
     
     try:
         channel = bot.get_channel(DISCORD_CHANNEL_ID)
+        logger.info(f"[DEBUG] Channel-Lookup: {channel is not None}, Channel-ID: {DISCORD_CHANNEL_ID}, Bot Ready: {bot.is_ready()}")
+        
         if not channel:
-            logger.warning("Channel nicht gefunden!")
+            logger.warning(f"⚠️ Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}, Bot Ready: {bot.is_ready()}")
             return
         
         for server in servers:
@@ -428,24 +430,34 @@ async def update_live_stats():
             # Verarbeite Server (Logs abrufen)
             await process_server(server, channel)
             
+            # Debug-Info
+            logger.info(f"[{server['name']}] Match-Status: ID={state['current_match_id']}, Rewarded={state['match_rewarded']}, Kills={len(state['match_kills'])}")
+            
             # Nur Live-Update wenn Match läuft und nicht belohnt
             if state["current_match_id"] and not state["match_rewarded"]:
                 current_map, _ = get_current_map(server)
                 embed = create_live_embed(server, state, current_map)
                 
+                logger.info(f"[{server['name']}] Versuche Discord-Message zu senden...")
+                
                 if state["live_message"]:
                     # Update existierende Message
                     try:
                         await state["live_message"].edit(embed=embed)
+                        logger.info(f"[{server['name']}] ✓ Live-Message aktualisiert")
                     except discord.NotFound:
                         # Message wurde gelöscht, erstelle neue
                         state["live_message"] = await channel.send(embed=embed)
+                        logger.info(f"[{server['name']}] ✓ Live-Message neu erstellt (alte gelöscht)")
                     except Exception as e:
-                        logger.error(f"Fehler beim Update der Live-Message: {e}")
+                        logger.error(f"[{server['name']}] ✗ Fehler beim Update der Live-Message: {e}", exc_info=True)
                 else:
                     # Erstelle neue Live-Message
-                    state["live_message"] = await channel.send(embed=embed)
-                    logger.info(f"[{server['name']}] Live-Message erstellt")
+                    try:
+                        state["live_message"] = await channel.send(embed=embed)
+                        logger.info(f"[{server['name']}] ✓ Live-Message erstellt")
+                    except Exception as e:
+                        logger.error(f"[{server['name']}] ✗ Fehler beim Erstellen der Live-Message: {e}", exc_info=True)
     
     except Exception as e:
         logger.error(f"Fehler in update_live_stats: {e}", exc_info=True)
@@ -456,16 +468,33 @@ async def on_ready():
     logger.info(f"\n{'='*60}")
     logger.info(f"🎯 TOP KILLER VIP BOT GESTARTET")
     logger.info(f"{'='*60}")
-    logger.info(f"Bot User: {bot.user}")
+    logger.info(f"Bot User: {bot.user} (ID: {bot.user.id})")
+    logger.info(f"Discord Channel ID: {DISCORD_CHANNEL_ID}")
+    logger.info(f"Guilds: {len(bot.guilds)}")
+    for guild in bot.guilds:
+        logger.info(f"  - Guild: {guild.name} (ID: {guild.id})")
     logger.info(f"Überwachte Server: {len(servers)}")
     for server in servers:
         logger.info(f"  - {server['name']}")
     logger.info(f"{'='*60}\n")
     
+    # Test Channel-Zugriff
+    test_channel = bot.get_channel(DISCORD_CHANNEL_ID)
+    if test_channel:
+        logger.info(f"✓ Channel gefunden: {test_channel.name} (ID: {test_channel.id}) in {test_channel.guild.name}")
+    else:
+        logger.error(f"✗ Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}")
+        logger.error(f"Verfügbare Channels:")
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                logger.error(f"  - {channel.name} (ID: {channel.id})")
+    
     # Starte Live-Update Task
     if not update_live_stats.is_running():
         update_live_stats.start()
         logger.info("✓ Live-Update Task gestartet")
+    else:
+        logger.warning("Live-Update Task läuft bereits")
 
 
 async def main():
