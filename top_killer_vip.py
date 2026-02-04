@@ -118,25 +118,25 @@ def get_current_map(server) -> Tuple[str, str]:
     """Hole aktuelle Map und Match-ID"""
     try:
         response = server["session"].get(
-            f"{server['base_url']}/api/get_gamestate",
+            f"{server['base_url']}/api/get_map",
             timeout=10
         )
         response.raise_for_status()
         result = response.json()
-        data = result.get("result", {})
         
         # Debug: Zeige die komplette API-Antwort
-        logger.debug(f"[{server['name']}] get_gamestate response: {data}")
+        logger.debug(f"[{server['name']}] get_map response: {result}")
         
-        # get_gamestate liefert direkt die Map-Namen
-        current_map = data.get("current_map", "Unknown")
-        next_map = data.get("next_map", "Unknown")
+        # get_map liefert die Map-Informationen
+        data = result.get("result", {})
         
-        # Verwende Map + Zeit als Match-ID (für Match-Wechsel-Erkennung)
-        raw_time = data.get("raw_time_remaining", "")
-        match_id = f"{current_map}_{raw_time}" if raw_time else current_map
+        # Map-Name aus verschiedenen möglichen Feldern extrahieren
+        current_map = data.get("id") or data.get("map") or data.get("name") or "Unknown"
         
-        logger.debug(f"[{server['name']}] Parsed: current_map={current_map}, next_map={next_map}, raw_time={raw_time}")
+        # Verwende Map-Name als Match-ID
+        match_id = current_map
+        
+        logger.debug(f"[{server['name']}] Parsed: current_map={current_map}")
         
         return current_map, match_id
     except Exception as e:
