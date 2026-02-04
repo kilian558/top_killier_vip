@@ -118,16 +118,19 @@ def get_current_map(server) -> Tuple[str, str]:
     """Hole aktuelle Map und Match-ID"""
     try:
         response = server["session"].get(
-            f"{server['base_url']}/api/get_status",
+            f"{server['base_url']}/api/get_gamestate",
             timeout=10
         )
         response.raise_for_status()
         data = response.json().get("result", {})
         
-        current_map = data.get("current_map", {}).get("name", "Unknown")
-        # Verwende Map + Start-Zeit als Match-ID
-        match_start = data.get("current_map", {}).get("start")
-        match_id = f"{current_map}_{match_start}" if match_start else current_map
+        # get_gamestate liefert direkt die Map-Namen
+        current_map = data.get("current_map", "Unknown")
+        next_map = data.get("next_map", "Unknown")
+        
+        # Verwende Map + Zeit als Match-ID (für Match-Wechsel-Erkennung)
+        raw_time = data.get("raw_time_remaining", "")
+        match_id = f"{current_map}_{raw_time}" if raw_time else current_map
         
         return current_map, match_id
     except Exception as e:
