@@ -263,7 +263,7 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
     
     if top_winners:
         winner_text = "🥇 Platz 1: +72 Stunden | 🥈 Platz 2: +48 Stunden | 🥉 Platz 3-5: +24 Stunden\n\n"
-        for rank, (steam_id, data, hours, success) in top_winners:
+        for rank, steam_id, data, hours, success in top_winners:
             emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}.get(rank, f"#{rank}")
             status = "✓" if success else "✗"
             winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills → +{hours}h VIP\n"
