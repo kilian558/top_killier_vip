@@ -114,7 +114,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def get_live_scoreboard(server) -> Dict:
+def get_live_scoreboard(server) -> List:
     """Hole Live-Scoreboard für aktuell verbundene Spieler"""
     try:
         response = server["session"].get(
@@ -122,10 +122,15 @@ def get_live_scoreboard(server) -> Dict:
             timeout=15
         )
         response.raise_for_status()
-        return response.json().get("result", {})
+        result = response.json().get("result", [])
+        # result sollte eine Liste von Spielern sein
+        if not isinstance(result, list):
+            logger.warning(f"[{server['name']}] Scoreboard ist keine Liste: {type(result)}")
+            return []
+        return result
     except Exception as e:
         logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
-        return {}
+        return []
 
 
 def get_current_map(server) -> Tuple[str, str]:
