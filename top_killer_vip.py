@@ -125,22 +125,40 @@ def get_current_map(server) -> Tuple[str, str]:
         result = response.json()
         
         # Debug: Zeige die komplette API-Antwort
-        logger.debug(f"[{server['name']}] get_map response: {result}")
+        logger.debug(f"[{server['name']}] get_map full response: {result}")
         
-        # get_map liefert die Map-Informationen
-        data = result.get("result", {})
+        # Versuche result zu extrahieren
+        data = result.get("result", result)
+        logger.debug(f"[{server['name']}] data after result extraction: {data}")
         
         # Map-Name aus verschiedenen möglichen Feldern extrahieren
-        current_map = data.get("id") or data.get("map") or data.get("name") or "Unknown"
+        current_map = None
+        
+        # Probiere verschiedene Felder
+        if isinstance(data, dict):
+            current_map = (
+                data.get("id") or 
+                data.get("map") or 
+                data.get("name") or
+                data.get("map_name") or
+                data.get("layer") or
+                data.get("layer_name")
+            )
+        elif isinstance(data, str):
+            current_map = data
+        
+        if not current_map or current_map == "Unknown":
+            logger.warning(f"[{server['name']}] Konnte Map nicht extrahieren. Data: {data}")
+            current_map = "Unknown"
         
         # Verwende Map-Name als Match-ID
         match_id = current_map
         
-        logger.debug(f"[{server['name']}] Parsed: current_map={current_map}")
+        logger.info(f"[{server['name']}] Aktuelle Map: {current_map}")
         
         return current_map, match_id
     except Exception as e:
-        logger.error(f"Fehler beim Abrufen der Map von {server['name']}: {e}")
+        logger.error(f"Fehler beim Abrufen der Map von {server['name']}: {e}", exc_info=True)
         return "Unknown", None
 
 
