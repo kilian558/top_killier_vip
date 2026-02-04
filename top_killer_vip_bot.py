@@ -89,6 +89,7 @@ server_states = {
     server["base_url"]: {
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
+        "baseline_kills": {},
         "match_start": None,
         "match_rewarded": False,
         "live_message": None,  # Discord Message für Live-Updates
@@ -128,6 +129,40 @@ def get_live_scoreboard(server):
     except Exception as e:
         logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
         return []
+
+
+def extract_scoreboard_players(scoreboard) -> List[Dict]:
+    """Extrahiere Spieler-Liste aus unterschiedlichen Scoreboard-Formaten"""
+    players: List[Dict] = []
+
+    if isinstance(scoreboard, dict):
+        # Team-Keys
+        for team_key in ("allied", "axis", "team1", "team2"):
+            team_players = scoreboard.get(team_key)
+            if isinstance(team_players, list):
+                players.extend([p for p in team_players if isinstance(p, dict)])
+
+        # stats-Array
+        if not players and isinstance(scoreboard.get("stats"), list):
+            players = [p for p in scoreboard.get("stats", []) if isinstance(p, dict)]
+
+        # players-Array
+        if not players and isinstance(scoreboard.get("players"), list):
+            players = [p for p in scoreboard.get("players", []) if isinstance(p, dict)]
+
+        # Dict mit steam_id als Keys
+        if not players:
+            for steam_id, data in scoreboard.items():
+                if isinstance(data, dict):
+                    data["player_id"] = steam_id
+                    players.append(data)
+                elif isinstance(data, list):
+                    players.extend([p for p in data if isinstance(p, dict)])
+
+    elif isinstance(scoreboard, list):
+        players = [p for p in scoreboard if isinstance(p, dict)]
+
+    return players
 
 
 def get_current_map(server) -> Tuple[str, str]:
@@ -239,7 +274,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     else:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
     
-    embed.set_footer(text="🔄 Auto-Update alle 10 Sekunden")
+    embed.set_footer(text="🔄 Auto-Update alle 30 Sekunden")
     
     return embed
 
@@ -368,10 +403,20 @@ async def process_server(server, channel):
         logger.info(f"[{server['name']}] Neues Match gestartet: {match_id}")
         state["current_match_id"] = match_id
         state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
+        state["baseline_kills"] = {}
         state["match_start"] = datetime.now(timezone.utc)
         state["match_rewarded"] = False
         state["live_message"] = None
         state["last_update"] = None
+
+        # Baseline-Kills beim Matchstart setzen (damit Kills bei 0 starten)
+        start_scoreboard = get_live_scoreboard(server)
+        start_players = extract_scoreboard_players(start_scoreboard)
+        for player in start_players:
+            steam_id = player.get("player_id") or player.get("steam_id_64")
+            kills = player.get("kills", 0)
+            if steam_id and steam_id != "None":
+                state["baseline_kills"][steam_id] = kills
     
     # Hole Live Scoreboard
     scoreboard = get_live_scoreboard(server)
@@ -384,38 +429,12 @@ async def process_server(server, channel):
     state["match_kills"].clear()
     
     # Verarbeite Spieler-Stats
-    # Scoreboard kann ein Dict oder eine Liste sein
     player_count = 0
-    players = []
+    players = extract_scoreboard_players(scoreboard)
     
     if isinstance(scoreboard, dict):
         logger.info(f"[{server['name']}] Scoreboard-Keys: {list(scoreboard.keys())}")
-        
-        # Häufige Formate: team-Keys mit Listen
-        for team_key in ("allied", "axis", "team1", "team2"):
-            team_players = scoreboard.get(team_key)
-            if isinstance(team_players, list):
-                players.extend(team_players)
-        
-        # Format: {"stats": [..]}
-        if not players and isinstance(scoreboard.get("stats"), list):
-            players = scoreboard.get("stats", [])
-        
-        # Alternativ: players-Array
-        if not players and isinstance(scoreboard.get("players"), list):
-            players = scoreboard.get("players", [])
-        
-        # Alternativ: Dict mit steam_id als Keys
-        if not players:
-            for steam_id, data in scoreboard.items():
-                if isinstance(data, dict):
-                    data["player_id"] = steam_id  # Füge player_id hinzu falls nicht vorhanden
-                    players.append(data)
-                elif isinstance(data, list):
-                    players.extend([p for p in data if isinstance(p, dict)])
-    elif isinstance(scoreboard, list):
-        players = scoreboard
-    
+
     logger.info(f"[{server['name']}] Anzahl Spieler im Scoreboard: {len(players)}")
     
     for player in players:
@@ -429,17 +448,25 @@ async def process_server(server, channel):
         if not steam_id or steam_id == "None":
             continue
         
-        # Update nur wenn Spieler Kills hat
-        if kills > 0:
-            state["match_kills"][steam_id] = {"name": player_name, "kills": kills}
+        # Baseline abziehen (Kills seit Matchstart)
+        baseline = state["baseline_kills"].get(steam_id, 0)
+        if kills < baseline:
+            # Spieler hat sich evtl. reconnectet, baseline anpassen
+            state["baseline_kills"][steam_id] = kills
+            baseline = kills
+        match_kills = max(0, kills - baseline)
+
+        # Update nur wenn Spieler Kills seit Matchstart hat
+        if match_kills > 0:
+            state["match_kills"][steam_id] = {"name": player_name, "kills": match_kills}
             player_count += 1
             
     logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(players)}")
 
 
-@tasks.loop(seconds=10)
+@tasks.loop(seconds=30)
 async def update_live_stats():
-    """Update Live-Stats alle 10 Sekunden"""
+    """Update Live-Stats alle 30 Sekunden"""
     if shutdown_requested:
         update_live_stats.cancel()
         return
