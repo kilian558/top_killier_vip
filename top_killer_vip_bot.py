@@ -397,6 +397,10 @@ async def process_server(server, channel):
             if isinstance(team_players, list):
                 players.extend(team_players)
         
+        # Format: {"stats": [..]}
+        if not players and isinstance(scoreboard.get("stats"), list):
+            players = scoreboard.get("stats", [])
+        
         # Alternativ: players-Array
         if not players and isinstance(scoreboard.get("players"), list):
             players = scoreboard.get("players", [])
