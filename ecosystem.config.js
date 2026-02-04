@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'top-killer-vip',
-      script: 'top_killer_vip.py',
+      script: 'top_killer_vip_bot.py',
       interpreter: 'python3',
       
       // Automatischer Restart bei Absturz
