@@ -114,17 +114,17 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def get_live_game_stats(server) -> Dict:
-    """Hole Live-Game-Stats für das aktuelle Match"""
+def get_live_scoreboard(server) -> Dict:
+    """Hole Live-Scoreboard für aktuell verbundene Spieler"""
     try:
         response = server["session"].get(
-            f"{server['base_url']}/api/get_live_game_stats",
+            f"{server['base_url']}/api/get_live_scoreboard",
             timeout=15
         )
         response.raise_for_status()
         return response.json().get("result", {})
     except Exception as e:
-        logger.error(f"Fehler beim Abrufen der Live-Stats von {server['name']}: {e}")
+        logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
         return {}
 
 
@@ -237,7 +237,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     else:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
     
-    embed.set_footer(text="🔄 Auto-Update alle 30 Sekunden")
+    embed.set_footer(text="🔄 Auto-Update alle 10 Sekunden")
     
     return embed
 
@@ -371,39 +371,41 @@ async def process_server(server, channel):
         state["live_message"] = None
         state["last_update"] = None
     
-    # Hole Live Game Stats
-    live_stats = get_live_game_stats(server)
+    # Hole Live Scoreboard
+    scoreboard = get_live_scoreboard(server)
     
-    logger.info(f"[{server['name']}] Live Stats Keys: {list(live_stats.keys()) if live_stats else 'None'}")
-    logger.info(f"[{server['name']}] Player Count: {len(live_stats.get('player_stats', {})) if live_stats else 0}")
-    
-    if not live_stats or "player_stats" not in live_stats:
-        logger.warning(f"[{server['name']}] Keine player_stats in Response!")
+    if not scoreboard:
+        logger.warning(f"[{server['name']}] Keine Scoreboard-Daten erhalten!")
         return
     
     # WICHTIG: Reset match_kills VOR dem Update, um alte Daten zu löschen
     state["match_kills"].clear()
     
     # Verarbeite Spieler-Stats
-    player_stats = live_stats.get("player_stats", {})
-    
-    for steam_id, stats in player_stats.items():
-        if not steam_id or steam_id == "None":
+    # Scoreboard ist eine Liste von Spieler-Objekten
+    player_count = 0
+    for player in scoreboard:
+        if not isinstance(player, dict):
             continue
             
-        player_name = stats.get("player", "Unknown")
-        kills = stats.get("kills", 0)
+        steam_id = player.get("player_id") or player.get("steam_id_64")
+        player_name = player.get("player") or player.get("name", "Unknown")
+        kills = player.get("kills", 0)
+        
+        if not steam_id or steam_id == "None":
+            continue
         
         # Update nur wenn Spieler Kills hat
         if kills > 0:
             state["match_kills"][steam_id] = {"name": player_name, "kills": kills}
+            player_count += 1
             
-    logger.info(f"[{server['name']}] Verarbeitete Spieler: {len(state['match_kills'])}")
+    logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(scoreboard)}")
 
 
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=10)
 async def update_live_stats():
-    """Update Live-Stats alle 30 Sekunden"""
+    """Update Live-Stats alle 10 Sekunden"""
     if shutdown_requested:
         update_live_stats.cancel()
         return
