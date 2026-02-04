@@ -21,7 +21,7 @@ load_dotenv()
 
 # Konfiguration Logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # DEBUG für detaillierte Ausgabe
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -122,7 +122,11 @@ def get_current_map(server) -> Tuple[str, str]:
             timeout=10
         )
         response.raise_for_status()
-        data = response.json().get("result", {})
+        result = response.json()
+        data = result.get("result", {})
+        
+        # Debug: Zeige die komplette API-Antwort
+        logger.debug(f"[{server['name']}] get_gamestate response: {data}")
         
         # get_gamestate liefert direkt die Map-Namen
         current_map = data.get("current_map", "Unknown")
@@ -131,6 +135,8 @@ def get_current_map(server) -> Tuple[str, str]:
         # Verwende Map + Zeit als Match-ID (für Match-Wechsel-Erkennung)
         raw_time = data.get("raw_time_remaining", "")
         match_id = f"{current_map}_{raw_time}" if raw_time else current_map
+        
+        logger.debug(f"[{server['name']}] Parsed: current_map={current_map}, next_map={next_map}, raw_time={raw_time}")
         
         return current_map, match_id
     except Exception as e:
