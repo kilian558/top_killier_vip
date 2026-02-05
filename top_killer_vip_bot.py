@@ -727,6 +727,7 @@ async def process_server(server, channel):
     
     # Support-Daten bevorzugt aus Map-Scoreboard (falls verfÃ¼gbar)
     support_players = None
+    map_players = None
     map_scoreboard = get_map_scoreboard(server)
     if map_scoreboard:
         map_players = extract_scoreboard_players(map_scoreboard)
@@ -781,7 +782,7 @@ async def process_server(server, channel):
             logger.info(
                 f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys} | "
                 f"support={sample_support} (type={type(sample_support).__name__}) | "
-                f"Quelle={'map' if support_players is map_players else 'live'}"
+                f"Quelle={'map' if (map_players is not None and support_players is map_players) else 'live'}"
             )
         state["support_debug_logged"] = True
             
