@@ -454,7 +454,12 @@ def add_vip_24h(server, steam_id: str, player_name: str) -> bool:
 def send_private_message(server, player_id: str, player_name: str, message: str):
     """Sende private Nachricht an Spieler"""
     try:
-        payload = {"player_id": player_id, "message": message}
+        payload = {
+            "player_id": player_id,
+            "message": message,
+            "by": "Top Killer VIP Bot",
+            "player_name": player_name
+        }
         response = server["session"].post(
             f"{server['base_url']}/api/message_player",
             json=payload,
@@ -462,12 +467,15 @@ def send_private_message(server, player_id: str, player_name: str, message: str)
         )
         
         if response.status_code == 200:
-            logger.info(f"✓ PM gesendet an {player_name} auf {server['name']}")
+            logger.info(f"✓ PM gesendet an {player_name} ({player_id}) auf {server['name']}")
+            return True
         else:
-            logger.warning(f"PM-Fehler für {player_name}: {response.status_code}")
+            logger.warning(f"PM-Fehler für {player_name}: {response.status_code} - {response.text[:100]}")
+            return False
             
     except Exception as e:
         logger.error(f"Fehler beim Senden der PM an {player_name}: {e}")
+        return False
 
 
 def send_discord_log(message: str):
