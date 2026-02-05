@@ -814,42 +814,37 @@ def process_server(server):
     
     # Extrahiere aus live_game_stats (primäre Quelle)
     if live_stats:
-        remaining = live_stats.get("time_remaining")
-        allied_score = live_stats.get("allied_score", 0)
-        axis_score = live_stats.get("axis_score", 0)
+        remaining = live_stats.get("time_remaining") or live_stats.get("remaining_time")
+        allied_score = live_stats.get("allied_score", 0) or live_stats.get("allied", {}).get("score", 0)
+        axis_score = live_stats.get("axis_score", 0) or live_stats.get("axis", {}).get("score", 0)
         logger.info(f"[{server['name']}] 🔍 Live Stats: Timer={remaining}, Score {allied_score}:{axis_score}")
     
-    # Fallback: gamestate + round_time_remaining
-    if remaining is None:
+    # Fallback: gamestate (gibt Sekunden als Float-String zurück)
+    if remaining is None or (allied_score == 0 and axis_score == 0):
         gamestate = get_gamestate(server)
         
         if isinstance(gamestate, dict):
-            # Timer
-            for key in ("remaining_time", "remaining_time_seconds", "remaining_time_sec", "remaining_time_s"):
-                if key in gamestate:
+            # Timer aus gamestate - kommt als Float-String (z.B. '4749.0')
+            if remaining is None:
+                timer_str = (
+                    gamestate.get("time_remaining") or 
+                    gamestate.get("remaining_time") or
+                    gamestate.get("raw_time_remaining")
+                )
+                
+                if timer_str:
                     try:
-                        remaining = float(gamestate[key])
-                        break
-                    except (TypeError, ValueError):
-                        pass
-            
-            # Score
-            for allied_key in ("allied_score", "team1_score", "allied", "team1"):
-                if allied_key in gamestate:
-                    try:
-                        allied_score = int(gamestate[allied_key])
-                        break
+                        # Als Float parsen (z.B. '4749.0' = Sekunden direkt)
+                        remaining = float(timer_str)
                     except (ValueError, TypeError):
                         pass
             
-            for axis_key in ("axis_score", "team2_score", "axis", "team2"):
-                if axis_key in gamestate:
-                    try:
-                        axis_score = int(gamestate[axis_key])
-                        break
-                    except (ValueError, TypeError):
-                        pass
+            # Score aus gamestate
+            if allied_score == 0 and axis_score == 0:
+                allied_score = gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0)
+                axis_score = gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0)
         
+        # Letzte Fallback: round_time_remaining
         if remaining is None:
             remaining = get_round_time_remaining(server)
     
