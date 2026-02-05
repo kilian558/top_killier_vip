@@ -85,7 +85,8 @@ server_states = {
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
         "match_start": None,
-        "match_rewarded": False
+        "match_rewarded": False,
+        "match_end_pending_at": None
     }
     for server in servers
 }
@@ -174,6 +175,47 @@ def get_live_scoreboard(server) -> List[Dict]:
         return []
 
 
+def get_map_scoreboard(server) -> List[Dict]:
+    """Hole Match-Scoreboard (Map) vom Server"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_map_scoreboard",
+            timeout=15
+        )
+        response.raise_for_status()
+        return response.json().get("result", [])
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Map-Scoreboards von {server['name']}: {e}")
+        return []
+
+
+def get_gamestate(server) -> Dict:
+    """Hole aktuellen Gamestate"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_gamestate",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json().get("result", {})
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Gamestates von {server['name']}: {e}")
+        return {}
+
+
+def get_round_time_remaining(server) -> float | None:
+    """Hole verbleibende Rundzeit in Sekunden"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_round_time_remaining",
+            timeout=10
+        )
+        response.raise_for_status()
+        return float(response.json().get("result"))
+    except Exception:
+        return None
+
+
 def extract_scoreboard_players(scoreboard) -> List[Dict]:
     """Extrahiere Spieler-Liste aus unterschiedlichen Scoreboard-Formaten"""
     players: List[Dict] = []
@@ -204,10 +246,11 @@ def extract_scoreboard_players(scoreboard) -> List[Dict]:
     return players
 
 
-def get_player_support_points(server, player_id: str = None, player_name: str = None) -> int | None:
-    """Lese Support-Punkte eines einzelnen Spielers aus dem Live-Scoreboard"""
-    scoreboard = get_live_scoreboard(server)
-    players = extract_scoreboard_players(scoreboard)
+def get_player_support_points(server, player_id: str = None, player_name: str = None, players: List[Dict] | None = None) -> int | None:
+    """Lese Support-Punkte eines einzelnen Spielers aus dem Scoreboard"""
+    if players is None:
+        scoreboard = get_live_scoreboard(server)
+        players = extract_scoreboard_players(scoreboard)
 
     def normalize_name(name: str) -> str:
         return (name or "").strip().casefold()
@@ -362,7 +405,7 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int, expiratio
         return False
 
 
-    def add_vip_24h(server, steam_id: str, player_name: str) -> bool:
+def add_vip_24h(server, steam_id: str, player_name: str) -> bool:
     """Füge 24h VIP hinzu (Legacy-Funktion)"""
     return add_vip_hours(server, steam_id, player_name, 24)
 
@@ -427,6 +470,11 @@ def process_match_end(server, state: Dict):
     discord_msg = f"**🏆 Match beendet auf {server['name']}**\n"
     discord_msg += f"Map: {current_map}\n\n"
 
+    map_scoreboard = get_map_scoreboard(server)
+    scoreboard_players = extract_scoreboard_players(map_scoreboard) if map_scoreboard else extract_scoreboard_players(get_live_scoreboard(server))
+    if not any(_extract_support_points(p) is not None for p in scoreboard_players):
+        logger.warning(f"[{server['name']}] Keine Support-Punkte im Scoreboard gefunden.")
+
     awarded_ids: set[str] = set()
 
     # Top Killer Benachrichtigungen (bis 3 VIP vergeben)
@@ -445,7 +493,12 @@ def process_match_end(server, state: Dict):
         has_vip = steam_id in vip_ids
         is_excluded = str(steam_id) in VIP_EXCLUDE_IDS or (player_name or "").strip().casefold() in VIP_EXCLUDE_NAMES
 
-        support_points = get_player_support_points(server, player_id=steam_id, player_name=player_name)
+        support_points = get_player_support_points(
+            server,
+            player_id=steam_id,
+            player_name=player_name,
+            players=scoreboard_players
+        )
 
         award_success = False
         expiration = None
@@ -524,10 +577,8 @@ def process_match_end(server, state: Dict):
             )
 
     # Top Support Benachrichtigungen (bis 2 VIP vergeben)
-    scoreboard = get_live_scoreboard(server)
-    players = extract_scoreboard_players(scoreboard)
     support_candidates = []
-    for player in players:
+    for player in scoreboard_players:
         pid = player.get("player_id") or player.get("steam_id") or player.get("playerid")
         pname = player.get("name") or player.get("player_name") or player.get("player") or "Unknown"
         points = _extract_support_points(player)
@@ -634,6 +685,31 @@ def process_match_end(server, state: Dict):
 def process_server(server):
     """Verarbeite Logs für einen Server"""
     state = server_states[server["base_url"]]
+
+    # Frühes Match-Ende erkennen (Scoreboard-Phase)
+    remaining = None
+    gamestate = get_gamestate(server)
+    if isinstance(gamestate, dict):
+        for key in ("remaining_time", "remaining_time_seconds", "remaining_time_sec", "remaining_time_s"):
+            if key in gamestate:
+                try:
+                    remaining = float(gamestate[key])
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+    if remaining is None:
+        remaining = get_round_time_remaining(server)
+
+    if remaining is not None and not state["match_rewarded"]:
+        if remaining <= 90 and state.get("match_end_pending_at") is None:
+            state["match_end_pending_at"] = datetime.now(timezone.utc)
+            logger.info(f"[{server['name']}] Match-Ende Phase erkannt (<=90s).")
+
+        if remaining <= 0:
+            logger.info(f"[{server['name']}] Match-Ende erkannt (Round Timer <= 0).")
+            process_match_end(server, state)
+            state["match_end_pending_at"] = None
     
     # Hole aktuelle Map/Match
     current_map, match_id = get_current_map(server)
@@ -651,6 +727,7 @@ def process_server(server):
         state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
         state["match_start"] = datetime.now()
         state["match_rewarded"] = False
+        state["match_end_pending_at"] = None
         
         send_discord_log(f"🎮 **Neues Match gestartet auf {server['name']}**\nMap: {current_map}")
     
