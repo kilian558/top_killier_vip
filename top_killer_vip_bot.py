@@ -357,6 +357,20 @@ def get_live_game_stats(server) -> Dict:
         return {}
 
 
+def get_gamestate(server) -> Dict:
+    """Hole aktuellen Gamestate (Fallback für Timer/Score)"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_gamestate",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json().get("result", {})
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Gamestates von {server['name']}: {e}")
+        return {}
+
+
 def get_current_map(server) -> Tuple[str, str]:
     """Hole aktuelle Map und Match-ID"""
     try:
@@ -514,12 +528,35 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     
     # Hole Live-Stats für Timer & Score
     live_stats = get_live_game_stats(server)
-    timer_remaining = live_stats.get("time_remaining")
-    allied_score = live_stats.get("allied_score", 0)
-    axis_score = live_stats.get("axis_score", 0)
+    timer_remaining = live_stats.get("time_remaining") or live_stats.get("remaining_time")
+    allied_score = live_stats.get("allied_score", 0) or live_stats.get("allied", {}).get("score", 0)
+    axis_score = live_stats.get("axis_score", 0) or live_stats.get("axis", {}).get("score", 0)
+    
+    # Fallback: gamestate (gibt andere Feldnamen zurück)
+    if timer_remaining is None or (allied_score == 0 and axis_score == 0):
+        gamestate = get_gamestate(server)
+        if isinstance(gamestate, dict):
+            # Timer aus gamestate
+            if timer_remaining is None:
+                timer_str = gamestate.get("remaining_time") or gamestate.get("time_remaining")
+                if timer_str:
+                    # Format: "0:11:51" oder "1:30:00" → Sekunden
+                    try:
+                        parts = str(timer_str).split(":")
+                        if len(parts) == 3:
+                            timer_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                        elif len(parts) == 2:
+                            timer_remaining = int(parts[0]) * 60 + int(parts[1])
+                    except:
+                        pass
+            
+            # Score aus gamestate
+            if allied_score == 0 and axis_score == 0:
+                allied_score = gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0)
+                axis_score = gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0)
     
     # Debug: Zeige was wir bekommen haben
-    logger.info(f"[{server['name']}] Live Stats für Embed: Timer={timer_remaining}, Score={allied_score}:{axis_score}, Stats-Keys={list(live_stats.keys()) if live_stats else 'None'}")
+    logger.info(f"[{server['name']}] Live Stats für Embed: Timer={timer_remaining}, Score={allied_score}:{axis_score}, Live-Keys={list(live_stats.keys()) if live_stats else 'None'}")
     
     # Sortiere nach Kills
     sorted_killers = sorted(
