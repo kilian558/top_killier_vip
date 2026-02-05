@@ -830,21 +830,35 @@ def process_server(server):
         if remaining is None:
             remaining = get_round_time_remaining(server)
 
-    # Match-Ende Bedingungen:
-    # 1. Timer bei 0 (Zeit abgelaufen) → 90s Scoreboard startet
-    # 2. Score 5:0 (ein Team gewinnt) → 90s Scoreboard startet
+    # Hole Logs ZUERST (um MATCH ENDED zu erkennen)
+    logs = get_historical_logs(server)
+    
+    # Prüfe auf MATCH ENDED Event in den neuesten Logs
+    match_ended_detected = False
+    if logs:
+        for log in logs[-20:]:  # Prüfe die letzten 20 Logs
+            log_type = log.get("type", "").upper()
+            if "MATCH" in log_type and ("END" in log_type or "ENDED" in log_type):
+                match_ended_detected = True
+                logger.info(f"[{server['name']}] 🏁 MATCH ENDED Event erkannt in Logs!")
+                break
+    
+    # Match-Ende Bedingungen (Priorität: Log-Event > Timer > Score)
     match_ended = False
     end_reason = ""
     
-    if remaining is not None and remaining <= 0:
+    if match_ended_detected:
         match_ended = True
-        end_reason = "Zeit abgelaufen (Timer ≤ 0)"
+        end_reason = "MATCH ENDED Event erkannt"
+    elif remaining is not None and remaining <= 0:
+        match_ended = True
+        end_reason = f"Zeit abgelaufen (Timer ≤ 0, Score {allied_score}:{axis_score})"
     elif allied_score >= 5 or axis_score >= 5:
         match_ended = True
         end_reason = f"Score erreicht ({allied_score}:{axis_score})"
     
     if match_ended and not state["match_rewarded"] and state["current_match_id"]:
-        logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason} - Scoreboard-Phase (90s)!")
+        logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason} - Verarbeite Belohnungen!")
         process_match_end(server, state)
         # WICHTIG: match_id bleibt gleich bis zum Map-Wechsel
         return
@@ -871,8 +885,6 @@ def process_server(server):
         
         send_discord_log(f"🎮 **Neues Match gestartet auf {server['name']}**\nMap: {current_map}")
     
-    # Hole Logs
-    logs = get_historical_logs(server)
     if not logs:
         return
     
