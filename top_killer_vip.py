@@ -714,6 +714,8 @@ def process_server(server):
     # Frühes Match-Ende erkennen (Scoreboard-Phase) - VOR Map-Wechsel-Check
     remaining = None
     gamestate = get_gamestate(server)
+    
+    # Extrahiere Timer aus Gamestate
     if isinstance(gamestate, dict):
         for key in ("remaining_time", "remaining_time_seconds", "remaining_time_sec", "remaining_time_s"):
             if key in gamestate:
@@ -726,17 +728,50 @@ def process_server(server):
     if remaining is None:
         remaining = get_round_time_remaining(server)
 
-    # Match-Ende während Scoreboard-Phase (Timer <= 0)
-    if remaining is not None and remaining <= 0 and not state["match_rewarded"] and state["current_match_id"]:
-        logger.info(f"[{server['name']}] ⚠️ Match-Ende erkannt (Round Timer <= 0) - Scoreboard-Phase!")
+    # Extrahiere Score aus Gamestate (Allied vs Axis)
+    allied_score = 0
+    axis_score = 0
+    if isinstance(gamestate, dict):
+        # Verschiedene mögliche Score-Felder
+        for allied_key in ("allied_score", "team1_score", "allied", "team1"):
+            if allied_key in gamestate:
+                try:
+                    allied_score = int(gamestate[allied_key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+        
+        for axis_key in ("axis_score", "team2_score", "axis", "team2"):
+            if axis_key in gamestate:
+                try:
+                    axis_score = int(gamestate[axis_key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+    # Match-Ende Bedingungen:
+    # 1. Timer bei 0 (Zeit abgelaufen) → 90s Scoreboard startet
+    # 2. Score 5:0 (ein Team gewinnt) → 90s Scoreboard startet
+    match_ended = False
+    end_reason = ""
+    
+    if remaining is not None and remaining <= 0:
+        match_ended = True
+        end_reason = "Zeit abgelaufen (Timer ≤ 0)"
+    elif allied_score >= 5 or axis_score >= 5:
+        match_ended = True
+        end_reason = f"Score erreicht ({allied_score}:{axis_score})"
+    
+    if match_ended and not state["match_rewarded"] and state["current_match_id"]:
+        logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason} - Scoreboard-Phase (90s)!")
         process_match_end(server, state)
         # WICHTIG: match_id bleibt gleich bis zum Map-Wechsel
         return
     
-    # Logging für Scoreboard-Phase
+    # Logging für Scoreboard-Phase (noch nicht bei 0/5:0)
     if remaining is not None and 0 < remaining <= 90 and not state["match_rewarded"] and state.get("match_end_pending_at") is None:
         state["match_end_pending_at"] = datetime.now(timezone.utc)
-        logger.info(f"[{server['name']}] ⏱️ Scoreboard-Phase erkannt ({remaining:.0f}s verbleibend).")
+        logger.info(f"[{server['name']}] ⏱️ Bald Scoreboard-Phase ({remaining:.0f}s verbleibend, Score {allied_score}:{axis_score}).")
     
     # Neues Match erkannt (Map-Wechsel)
     if match_id and match_id != state["current_match_id"]:
