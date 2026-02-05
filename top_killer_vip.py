@@ -467,18 +467,28 @@ def process_match_end(server, state: Dict):
 
     # Erstelle Discord-Log
     current_map, _ = get_current_map(server)
-    discord_msg = f"**🏆 Match beendet auf {server['name']}**\n"
+    discord_msg = f"**🏆 Match beendet - {server['name']}**\n"
     discord_msg += f"Map: {current_map}\n\n"
 
+    # Versuche Map-Scoreboard, dann Live-Scoreboard als Fallback
     map_scoreboard = get_map_scoreboard(server)
-    scoreboard_players = extract_scoreboard_players(map_scoreboard) if map_scoreboard else extract_scoreboard_players(get_live_scoreboard(server))
-    if not any(_extract_support_points(p) is not None for p in scoreboard_players):
-        logger.warning(f"[{server['name']}] Keine Support-Punkte im Scoreboard gefunden.")
+    if map_scoreboard:
+        logger.info(f"[{server['name']}] ✓ Map-Scoreboard verfügbar")
+        scoreboard_players = extract_scoreboard_players(map_scoreboard)
+    else:
+        logger.warning(f"[{server['name']}] ⚠️ Map-Scoreboard nicht verfügbar - verwende Live-Scoreboard")
+        scoreboard_players = extract_scoreboard_players(get_live_scoreboard(server))
+    
+    # Prüfe ob Support-Punkte verfügbar sind
+    support_available = any(_extract_support_points(p) is not None and _extract_support_points(p) > 0 for p in scoreboard_players)
+    if not support_available:
+        logger.warning(f"[{server['name']}] ⚠️ Keine Support-Punkte im Scoreboard gefunden (möglicherweise API-Permission fehlt).")
 
     awarded_ids: set[str] = set()
 
     # Top Killer Benachrichtigungen (bis 3 VIP vergeben)
-    discord_msg += "**Top Killer Benachrichtigungen (bis 3 VIP vergeben):**\n"
+    discord_msg += "**📊 VIP Belohnungen vergeben:**\n"
+    discord_msg += "**🔪 Platz 1-3: +24 Stunden**\n\n"
 
     killer_results = []
     vip_awarded_count = 0
@@ -588,7 +598,11 @@ def process_match_end(server, state: Dict):
             support_candidates.append((pid, pname, points))
 
     support_candidates.sort(key=lambda x: x[2], reverse=True)
-    discord_msg += "\n**Top Support Benachrichtigungen (bis 2 VIP vergeben):**\n"
+    
+    if support_available:
+        discord_msg += "\n**🛠️ Platz 1-2 Support: +24 Stunden**\n\n"
+    else:
+        discord_msg += "\n**⚠️ Support-Punkte nicht verfügbar (API-Permission fehlt möglicherweise)**\n\n"
 
     support_results = []
     support_awarded_count = 0
@@ -671,13 +685,21 @@ def process_match_end(server, state: Dict):
             discord_msg += f"• {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → keine VIP (bereits VIP/ausgenommen)\n"
     
     # Zeige alle Top 10 zur Info
-    discord_msg += "\n**Top 10 Gesamt:**\n"
+    discord_msg += "\n**📊 Top 10 Gesamt:**\n"
     for rank, (steam_id, data) in enumerate(sorted_killers[:10], 1):
-        has_vip = "👑" if steam_id in vip_ids else ""
-        discord_msg += f"{rank}. {data['name']} - {data['kills']} Kills {has_vip}\n"
+        player_support = get_player_support_points(
+            server,
+            player_id=steam_id,
+            player_name=data['name'],
+            players=scoreboard_players
+        )
+        support_text = f", Support: {player_support}" if player_support is not None and player_support > 0 else ""
+        discord_msg += f"{data['name']} - {data['kills']} Kills{support_text}\n"
+    
+    discord_msg += f"\n✅ **Match abgeschlossen** • {datetime.now(timezone.utc).strftime('%H:%M Uhr')}"
     
     send_discord_log(discord_msg)
-    logger.info(f"[{server['name']}] ✓ Match abgeschlossen – Punkteanzeige gesendet")
+    logger.info(f"[{server['name']}] ✓ Match abgeschlossen – Belohnungen vergeben & Discord-Benachrichtigung gesendet")
     
     state["match_rewarded"] = True
 
@@ -686,7 +708,10 @@ def process_server(server):
     """Verarbeite Logs für einen Server"""
     state = server_states[server["base_url"]]
 
-    # Frühes Match-Ende erkennen (Scoreboard-Phase)
+    # Hole aktuelle Map/Match ZUERST
+    current_map, match_id = get_current_map(server)
+    
+    # Frühes Match-Ende erkennen (Scoreboard-Phase) - VOR Map-Wechsel-Check
     remaining = None
     gamestate = get_gamestate(server)
     if isinstance(gamestate, dict):
@@ -701,28 +726,27 @@ def process_server(server):
     if remaining is None:
         remaining = get_round_time_remaining(server)
 
-    if remaining is not None and not state["match_rewarded"]:
-        if remaining <= 90 and state.get("match_end_pending_at") is None:
-            state["match_end_pending_at"] = datetime.now(timezone.utc)
-            logger.info(f"[{server['name']}] Match-Ende Phase erkannt (<=90s).")
-
-        if remaining <= 0:
-            logger.info(f"[{server['name']}] Match-Ende erkannt (Round Timer <= 0).")
-            process_match_end(server, state)
-            state["match_end_pending_at"] = None
+    # Match-Ende während Scoreboard-Phase (Timer <= 0)
+    if remaining is not None and remaining <= 0 and not state["match_rewarded"] and state["current_match_id"]:
+        logger.info(f"[{server['name']}] ⚠️ Match-Ende erkannt (Round Timer <= 0) - Scoreboard-Phase!")
+        process_match_end(server, state)
+        # WICHTIG: match_id bleibt gleich bis zum Map-Wechsel
+        return
     
-    # Hole aktuelle Map/Match
-    current_map, match_id = get_current_map(server)
+    # Logging für Scoreboard-Phase
+    if remaining is not None and 0 < remaining <= 90 and not state["match_rewarded"] and state.get("match_end_pending_at") is None:
+        state["match_end_pending_at"] = datetime.now(timezone.utc)
+        logger.info(f"[{server['name']}] ⏱️ Scoreboard-Phase erkannt ({remaining:.0f}s verbleibend).")
     
+    # Neues Match erkannt (Map-Wechsel)
     if match_id and match_id != state["current_match_id"]:
-        # Neues Match erkannt
-        if state["current_match_id"]:
-            logger.info(f"[{server['name']}] Match-Ende erkannt: {state['current_match_id']}")
-            # Verarbeite vorheriges Match
+        # Vorheriges Match abschließen (falls noch nicht rewarded)
+        if state["current_match_id"] and not state["match_rewarded"]:
+            logger.warning(f"[{server['name']}] ⚠️ Map-Wechsel ohne Match-Abschluss erkannt! Verarbeite nachträglich.")
             process_match_end(server, state)
         
         # Reset für neues Match
-        logger.info(f"[{server['name']}] Neues Match gestartet: {match_id}")
+        logger.info(f"[{server['name']}] 🗺️ Neues Match gestartet: {match_id}")
         state["current_match_id"] = match_id
         state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
         state["match_start"] = datetime.now()
