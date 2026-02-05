@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-Top Killer VIP Bot für Hell Let Loose CRCON mit Discord Bot Integration
-Trackt Kills während eines Matches mit Live-Updates in Discord
+Top Killer VIP Bot fÃ¼r Hell Let Loose CRCON mit Discord Bot Integration
+Trackt Kills wÃ¤hrend eines Matches mit Live-Updates in Discord
 """
 
 import os
@@ -9,6 +9,8 @@ import sys
 import signal
 import logging
 import asyncio
+import json
+import time
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
@@ -63,7 +65,7 @@ if not servers:
     logger.error("FEHLER: Keine Server-URLs konfiguriert!")
     sys.exit(1)
 
-# Initialisiere Sessions für jeden Server
+# Initialisiere Sessions fÃ¼r jeden Server
 for server in servers:
     session = requests.Session()
     session.headers.update({
@@ -79,9 +81,9 @@ for server in servers:
         response.raise_for_status()
         data = response.json()
         server["name"] = data.get("result", {}).get("name") or server["name"]
-        logger.info(f"✓ Verbunden mit: {server['name']}")
+        logger.info(f"âœ“ Verbunden mit: {server['name']}")
     except Exception as e:
-        logger.error(f"✗ Verbindung zu {server['name']} fehlgeschlagen: {e}")
+        logger.error(f"âœ— Verbindung zu {server['name']} fehlgeschlagen: {e}")
         sys.exit(1)
 
 # Server States
@@ -90,10 +92,14 @@ server_states = {
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
         "baseline_kills": {},
+        "kill_offsets": {},
         "match_start": None,
         "match_rewarded": False,
-        "live_message": None,  # Discord Message für Live-Updates
-        "last_update": None    # Timestamp des letzten Updates
+        "live_message": None,  # Discord Message fÃ¼r Live-Updates
+        "live_message_id": None,
+        "last_update": None,   # Timestamp des letzten Updates
+        "inactive_since": None,
+        "current_map": None
     }
     for server in servers
 }
@@ -105,6 +111,14 @@ bot = discord.Client(intents=intents)
 
 # Graceful Shutdown Handler
 shutdown_requested = False
+last_channel_warning = 0.0
+last_state_write = 0.0
+STATE_WRITE_MIN_SECONDS = 20
+STATE_FILE = os.path.join("data", "state.json")
+RESTART_HOUR = 4
+RESTART_MINUTE = 30
+
+last_restart_date = None
 
 def signal_handler(sig, frame):
     global shutdown_requested
@@ -115,8 +129,99 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
+def ensure_data_dir():
+    data_dir = os.path.dirname(STATE_FILE)
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+
+
+def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if not value:
+        return None
+    return value.isoformat()
+
+
+def load_state():
+    global last_restart_date
+    if not os.path.exists(STATE_FILE):
+        return
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.error(f"Fehler beim Laden von {STATE_FILE}: {e}")
+        return
+
+    last_restart_date = data.get("last_restart_date")
+
+    server_data = data.get("servers", {})
+    for server in servers:
+        base_url = server["base_url"]
+        saved = server_data.get(base_url)
+        if not saved:
+            continue
+
+        state = server_states[base_url]
+        state["current_match_id"] = saved.get("current_match_id")
+        state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0}, saved.get("match_kills", {}))
+        state["baseline_kills"] = saved.get("baseline_kills", {})
+        state["kill_offsets"] = saved.get("kill_offsets", {})
+        state["match_start"] = _parse_datetime(saved.get("match_start"))
+        state["match_rewarded"] = saved.get("match_rewarded", False)
+        state["live_message_id"] = saved.get("live_message_id")
+        state["inactive_since"] = _parse_datetime(saved.get("inactive_since"))
+        state["current_map"] = saved.get("current_map")
+
+    logger.info("✓ State geladen")
+
+
+def save_state(force: bool = False):
+    global last_state_write
+    now_ts = time.time()
+    if not force and (now_ts - last_state_write) < STATE_WRITE_MIN_SECONDS:
+        return
+
+    ensure_data_dir()
+    payload = {
+        "last_restart_date": last_restart_date,
+        "servers": {}
+    }
+
+    for server in servers:
+        base_url = server["base_url"]
+        state = server_states[base_url]
+        payload["servers"][base_url] = {
+            "current_match_id": state.get("current_match_id"),
+            "match_kills": dict(state.get("match_kills", {})),
+            "baseline_kills": state.get("baseline_kills", {}),
+            "kill_offsets": state.get("kill_offsets", {}),
+            "match_start": _serialize_datetime(state.get("match_start")),
+            "match_rewarded": state.get("match_rewarded", False),
+            "live_message_id": state.get("live_message_id"),
+            "inactive_since": _serialize_datetime(state.get("inactive_since")),
+            "current_map": state.get("current_map")
+        }
+
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, indent=2)
+        last_state_write = now_ts
+    except Exception as e:
+        logger.error(f"Fehler beim Speichern von {STATE_FILE}: {e}")
+
+
 def get_live_scoreboard(server):
-    """Hole Live-Scoreboard für aktuell verbundene Spieler"""
+    """Hole Live-Scoreboard fÃ¼r aktuell verbundene Spieler"""
     try:
         response = server["session"].get(
             f"{server['base_url']}/api/get_live_scoreboard",
@@ -128,7 +233,7 @@ def get_live_scoreboard(server):
         return result
     except Exception as e:
         logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
-        return []
+        return None
 
 
 def extract_scoreboard_players(scoreboard) -> List[Dict]:
@@ -217,7 +322,7 @@ def get_vip_ids(server) -> set:
 
 
 def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
-    """Füge VIP mit angegebenen Stunden hinzu"""
+    """FÃ¼ge VIP mit angegebenen Stunden hinzu"""
     try:
         expiration = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
         
@@ -234,14 +339,14 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
         )
         
         if response.status_code == 200:
-            logger.info(f"✓ VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
+            logger.info(f"âœ“ VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
             return True
         else:
-            logger.error(f"✗ VIP-Fehler für {player_name}: {response.status_code} - {response.text[:200]}")
+            logger.error(f"âœ— VIP-Fehler fÃ¼r {player_name}: {response.status_code} - {response.text[:200]}")
             return False
             
     except Exception as e:
-        logger.error(f"Fehler beim Vergeben von VIP für {player_name}: {e}")
+        logger.error(f"Fehler beim Vergeben von VIP fÃ¼r {player_name}: {e}")
         return False
 
 
@@ -258,7 +363,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     
     # Embed erstellen
     embed = discord.Embed(
-        title=f"🎯 Live Match Stats - {server['name']}",
+        title=f"ðŸŽ¯ Live Match Stats - {server['name']}",
         description=f"**Map:** {current_map}\n**Match Start:** <t:{int(state['match_start'].timestamp())}:R>" if state['match_start'] else f"**Map:** {current_map}",
         color=0x00ff00,
         timestamp=datetime.now(timezone.utc)
@@ -267,14 +372,14 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     if sorted_killers:
         top_text = ""
         for rank, (steam_id, data) in enumerate(sorted_killers, 1):
-            emoji = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, "▫️")
+            emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰"}.get(rank, "â–«ï¸")
             top_text += f"{emoji} **{data['name'][:25]}** - {data['kills']} Kills\n"
         
         embed.add_field(name="Top 10 Killer", value=top_text or "Noch keine Kills", inline=False)
     else:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
     
-    embed.set_footer(text="🔄 Auto-Update alle 30 Sekunden")
+    embed.set_footer(text="ðŸ”„ Auto-Update alle 30 Sekunden")
     
     return embed
 
@@ -290,29 +395,29 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
     )[:10]
     
     embed = discord.Embed(
-        title=f"🏆 Match beendet - {server['name']}",
+        title=f"ðŸ† Match beendet - {server['name']}",
         description=f"**Map:** {current_map}",
         color=0xffd700,
         timestamp=datetime.now(timezone.utc)
     )
     
     if top_winners:
-        winner_text = "🥇 Platz 1: +72 Stunden | 🥈 Platz 2: +48 Stunden | 🥉 Platz 3-5: +24 Stunden\n\n"
+        winner_text = "ðŸ¥‡ Platz 1: +72 Stunden | ðŸ¥ˆ Platz 2: +48 Stunden | ðŸ¥‰ Platz 3-5: +24 Stunden\n\n"
         for rank, steam_id, data, hours, success in top_winners:
-            emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}.get(rank, f"#{rank}")
-            status = "✓" if success else "✗"
-            winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills → +{hours}h VIP\n"
+            emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰", 4: "4ï¸âƒ£", 5: "5ï¸âƒ£"}.get(rank, f"#{rank}")
+            status = "âœ“" if success else "âœ—"
+            winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills â†’ +{hours}h VIP\n"
         
-        embed.add_field(name="🎁 VIP Belohnungen vergeben", value=winner_text, inline=False)
+        embed.add_field(name="ðŸŽ VIP Belohnungen vergeben", value=winner_text, inline=False)
     
     if sorted_killers:
         top_text = ""
         vip_ids = get_vip_ids(server)
         for rank, (steam_id, data) in enumerate(sorted_killers, 1):
-            has_vip = "👑" if steam_id in vip_ids else ""
+            has_vip = "ðŸ‘‘" if steam_id in vip_ids else ""
             top_text += f"{rank}. **{data['name'][:25]}** - {data['kills']} Kills {has_vip}\n"
         
-        embed.add_field(name="📊 Top 10 Gesamt", value=top_text, inline=False)
+        embed.add_field(name="ðŸ“Š Top 10 Gesamt", value=top_text, inline=False)
     
     embed.set_footer(text="Match abgeschlossen")
     
@@ -377,8 +482,8 @@ async def process_match_end(server, state: Dict, channel):
         success = all(per_server_success)
         top_winners.append((rank, steam_id, data, hours, success))
         
-        rank_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
-        status = "✓" if success else "✗"
+        rank_emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰", 4: "4ï¸âƒ£", 5: "5ï¸âƒ£"}
+        status = "âœ“" if success else "âœ—"
         logger.info(f"[{server['name']}] {status} Platz {rank}: {player_name} ({steam_id}) - {kills} Kills - +{hours}h VIP")
     
     # "Freeze" die Live-Message mit finalem Embed
@@ -388,20 +493,43 @@ async def process_match_end(server, state: Dict, channel):
     if state["live_message"]:
         try:
             await state["live_message"].edit(embed=final_embed)
-            logger.info(f"[{server['name']}] ✓ Live-Message eingefroren mit finalen Ergebnissen")
+            logger.info(f"[{server['name']}] âœ“ Live-Message eingefroren mit finalen Ergebnissen")
         except Exception as e:
             logger.error(f"Fehler beim Einfrieren der Live-Message: {e}")
     
     state["match_rewarded"] = True
-    logger.info(f"[{server['name']}] ✓ VIP an Top 5 Killer vergeben (72h/48h/24h/24h/24h)")
+    logger.info(f"[{server['name']}] âœ“ VIP an Top 5 Killer vergeben (72h/48h/24h/24h/24h)")
 
 
 async def process_server(server, channel):
-    """Verarbeite Stats für einen Server"""
+    """Verarbeite Stats fÃ¼r einen Server"""
     state = server_states[server["base_url"]]
-    
+
+    scoreboard = get_live_scoreboard(server)
+    if scoreboard is None:
+        if not state.get("inactive_since"):
+            state["inactive_since"] = datetime.now(timezone.utc)
+            logger.warning(f"[{server['name']}] Server ist inaktiv seit {state['inactive_since'].isoformat()}")
+        return
+
+    if state.get("inactive_since"):
+        inactive_for = datetime.now(timezone.utc) - state["inactive_since"]
+        logger.info(f"[{server['name']}] Server wieder aktiv nach {inactive_for}")
+        state["inactive_since"] = None
+
+        # Restart counting from current stats while keeping previous totals
+        state["kill_offsets"] = {}
+        for steam_id, data in state["match_kills"].items():
+            state["kill_offsets"][steam_id] = data.get("kills", 0)
+        for player in extract_scoreboard_players(scoreboard):
+            steam_id = player.get("player_id") or player.get("steam_id_64")
+            kills = player.get("kills", 0)
+            if steam_id and steam_id != "None":
+                state["baseline_kills"][steam_id] = kills
+
     # Hole aktuelle Map/Match
     current_map, match_id = get_current_map(server)
+    state["current_map"] = current_map
     
     if match_id and match_id != state["current_match_id"]:
         # Neues Match erkannt
@@ -410,33 +538,26 @@ async def process_server(server, channel):
             # Verarbeite vorheriges Match
             await process_match_end(server, state, channel)
         
-        # Reset für neues Match
+        # Reset fÃ¼r neues Match
         logger.info(f"[{server['name']}] Neues Match gestartet: {match_id}")
         state["current_match_id"] = match_id
         state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
         state["baseline_kills"] = {}
+        state["kill_offsets"] = {}
         state["match_start"] = datetime.now(timezone.utc)
         state["match_rewarded"] = False
         state["live_message"] = None
         state["last_update"] = None
 
         # Baseline-Kills beim Matchstart setzen (damit Kills bei 0 starten)
-        start_scoreboard = get_live_scoreboard(server)
-        start_players = extract_scoreboard_players(start_scoreboard)
+        start_players = extract_scoreboard_players(scoreboard)
         for player in start_players:
             steam_id = player.get("player_id") or player.get("steam_id_64")
             kills = player.get("kills", 0)
             if steam_id and steam_id != "None":
                 state["baseline_kills"][steam_id] = kills
     
-    # Hole Live Scoreboard
-    scoreboard = get_live_scoreboard(server)
-    
-    if not scoreboard:
-        logger.warning(f"[{server['name']}] Keine Scoreboard-Daten erhalten!")
-        return
-    
-    # WICHTIG: Reset match_kills VOR dem Update, um alte Daten zu löschen
+    # WICHTIG: Reset match_kills VOR dem Update, um alte Daten zu lÃ¶schen
     state["match_kills"].clear()
     
     # Verarbeite Spieler-Stats
@@ -465,7 +586,8 @@ async def process_server(server, channel):
             # Spieler hat sich evtl. reconnectet, baseline anpassen
             state["baseline_kills"][steam_id] = kills
             baseline = kills
-        match_kills = max(0, kills - baseline)
+        offset = state.get("kill_offsets", {}).get(steam_id, 0)
+        match_kills = max(0, offset + (kills - baseline))
 
         # Update nur wenn Spieler Kills seit Matchstart hat
         if match_kills > 0:
@@ -487,7 +609,7 @@ async def update_live_stats():
         logger.info(f"[DEBUG] Channel-Lookup: {channel is not None}, Channel-ID: {DISCORD_CHANNEL_ID}, Bot Ready: {bot.is_ready()}")
         
         if not channel:
-            logger.warning(f"⚠️ Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}, Bot Ready: {bot.is_ready()}")
+            logger.warning(f"âš ï¸ Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}, Bot Ready: {bot.is_ready()}")
             return
         
         for server in servers:
@@ -499,9 +621,9 @@ async def update_live_stats():
             # Debug-Info
             logger.info(f"[{server['name']}] Match-Status: ID={state['current_match_id']}, Rewarded={state['match_rewarded']}, Kills={len(state['match_kills'])}")
             
-            # Nur Live-Update wenn Match läuft und nicht belohnt
-            if state["current_match_id"] and not state["match_rewarded"]:
-                current_map, _ = get_current_map(server)
+            # Nur Live-Update wenn Match lÃ¤uft und nicht belohnt
+            if state["current_match_id"] and not state["match_rewarded"] and not state.get("inactive_since"):
+                current_map = state.get("current_map") or "Unknown"
                 embed = create_live_embed(server, state, current_map)
                 
                 logger.info(f"[{server['name']}] Versuche Discord-Message zu senden...")
@@ -509,37 +631,81 @@ async def update_live_stats():
                 if state["live_message"]:
                     # Update existierende Message
                     try:
+                        if not state.get("live_message_id"):
+                            state["live_message_id"] = state["live_message"].id
                         await state["live_message"].edit(embed=embed)
-                        logger.info(f"[{server['name']}] ✓ Live-Message aktualisiert")
+                        logger.info(f"[{server['name']}] âœ“ Live-Message aktualisiert")
                     except discord.NotFound:
-                        # Message wurde gelöscht, erstelle neue
+                        # Message wurde gelÃ¶scht, erstelle neue
                         state["live_message"] = await channel.send(embed=embed)
-                        logger.info(f"[{server['name']}] ✓ Live-Message neu erstellt (alte gelöscht)")
+                        state["live_message_id"] = state["live_message"].id
+                        logger.info(f"[{server['name']}] âœ“ Live-Message neu erstellt (alte gelÃ¶scht)")
                     except Exception as e:
-                        logger.error(f"[{server['name']}] ✗ Fehler beim Update der Live-Message: {e}", exc_info=True)
+                        logger.error(f"[{server['name']}] âœ— Fehler beim Update der Live-Message: {e}", exc_info=True)
                 else:
                     # Erstelle neue Live-Message
                     try:
                         state["live_message"] = await channel.send(embed=embed)
-                        logger.info(f"[{server['name']}] ✓ Live-Message erstellt")
+                        state["live_message_id"] = state["live_message"].id
+                        logger.info(f"[{server['name']}] âœ“ Live-Message erstellt")
                     except Exception as e:
-                        logger.error(f"[{server['name']}] ✗ Fehler beim Erstellen der Live-Message: {e}", exc_info=True)
+                        logger.error(f"[{server['name']}] âœ— Fehler beim Erstellen der Live-Message: {e}", exc_info=True)
+
+        save_state()
     
     except Exception as e:
         logger.error(f"Fehler in update_live_stats: {e}", exc_info=True)
 
 
+@tasks.loop(minutes=1)
+async def daily_restart_check():
+    global last_restart_date
+    if shutdown_requested:
+        daily_restart_check.cancel()
+        return
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    if last_restart_date == today_str:
+        return
+
+    if now.hour > RESTART_HOUR or (now.hour == RESTART_HOUR and now.minute >= RESTART_MINUTE):
+        last_restart_date = today_str
+        save_state(force=True)
+        logger.info(f"[RESTART] TÃ¤glicher Neustart ausgelÃ¶st um {RESTART_HOUR:02d}:{RESTART_MINUTE:02d}")
+        await bot.close()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+async def restore_live_messages(channel):
+    for server in servers:
+        state = server_states[server["base_url"]]
+        message_id = state.get("live_message_id")
+        if not message_id:
+            continue
+        try:
+            state["live_message"] = await channel.fetch_message(message_id)
+            state["live_message_id"] = state["live_message"].id
+            logger.info(f"[{server['name']}] âœ“ Live-Message wiederhergestellt (ID: {message_id})")
+        except discord.NotFound:
+            state["live_message"] = None
+            state["live_message_id"] = None
+            logger.warning(f"[{server['name']}] Live-Message nicht gefunden (ID: {message_id})")
+        except Exception as e:
+            logger.error(f"[{server['name']}] Fehler beim Laden der Live-Message: {e}")
+
+
 @bot.event
 async def on_ready():
     logger.info(f"\n{'='*60}")
-    logger.info(f"🎯 TOP KILLER VIP BOT GESTARTET")
+    logger.info(f"ðŸŽ¯ TOP KILLER VIP BOT GESTARTET")
     logger.info(f"{'='*60}")
     logger.info(f"Bot User: {bot.user} (ID: {bot.user.id})")
     logger.info(f"Discord Channel ID: {DISCORD_CHANNEL_ID}")
     logger.info(f"Guilds: {len(bot.guilds)}")
     for guild in bot.guilds:
         logger.info(f"  - Guild: {guild.name} (ID: {guild.id})")
-    logger.info(f"Überwachte Server: {len(servers)}")
+    logger.info(f"Ãœberwachte Server: {len(servers)}")
     for server in servers:
         logger.info(f"  - {server['name']}")
     logger.info(f"{'='*60}\n")
@@ -547,10 +713,11 @@ async def on_ready():
     # Test Channel-Zugriff
     test_channel = bot.get_channel(DISCORD_CHANNEL_ID)
     if test_channel:
-        logger.info(f"✓ Channel gefunden: {test_channel.name} (ID: {test_channel.id}) in {test_channel.guild.name}")
+        logger.info(f"âœ“ Channel gefunden: {test_channel.name} (ID: {test_channel.id}) in {test_channel.guild.name}")
+        await restore_live_messages(test_channel)
     else:
-        logger.error(f"✗ Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}")
-        logger.error(f"Verfügbare Channels:")
+        logger.error(f"âœ— Channel nicht gefunden! Channel-ID: {DISCORD_CHANNEL_ID}")
+        logger.error(f"VerfÃ¼gbare Channels:")
         for guild in bot.guilds:
             for channel in guild.text_channels:
                 logger.error(f"  - {channel.name} (ID: {channel.id})")
@@ -558,9 +725,13 @@ async def on_ready():
     # Starte Live-Update Task
     if not update_live_stats.is_running():
         update_live_stats.start()
-        logger.info("✓ Live-Update Task gestartet")
+        logger.info("âœ“ Live-Update Task gestartet")
     else:
-        logger.warning("Live-Update Task läuft bereits")
+        logger.warning("Live-Update Task lÃ¤uft bereits")
+
+    if not daily_restart_check.is_running():
+        daily_restart_check.start()
+        logger.info("âœ“ Daily-Restart Task gestartet")
 
 
 async def main():
@@ -572,6 +743,7 @@ async def main():
     except Exception as e:
         logger.error(f"Fataler Fehler: {e}", exc_info=True)
     finally:
+        save_state(force=True)
         if not bot.is_closed():
             await bot.close()
         logger.info("[SHUTDOWN] Bot beendet")
@@ -579,6 +751,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        load_state()
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot gestoppt")
