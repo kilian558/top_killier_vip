@@ -836,8 +836,9 @@ def process_server(server):
     logs = get_historical_logs(server)
     
     # Match-Ende Erkennung: 2. Mal Timer ≤90s ODER Score 5:x
-    # Regel #1: Timer fällt zum 2. Mal auf ≤90s = Scoreboard-Phase = Match Ende
-    # Regel #2: Score 5:x = Sofortiges Match Ende
+    # Regel #1: Timer fällt zum 2. Mal auf ≤90s = Scoreboard-Phase startet
+    # Regel #2: Auswertung erst bei ≤80s (nach 10s Scoreboard-Phase)
+    # Regel #3: Score 5:x = Sofortiges Match Ende
     match_ended = False
     end_reason = ""
     
@@ -854,10 +855,15 @@ def process_server(server):
                 # Erstes Mal ≤90s
                 state["timer_below_90s_seen"] = True
                 logger.info(f"[{server['name']}] ⏱️ 1. Mal Timer ≤90s erkannt ({remaining:.0f}s, Score {allied_score}:{axis_score})")
-            else:
-                # Zweites Mal ≤90s = Scoreboard-Phase!
+            elif remaining <= 80:
+                # Zweites Mal ≤90s UND Timer ≤80s = Auswertung starten!
                 match_ended = True
-                end_reason = f"2. Mal Timer ≤90s = Scoreboard-Phase ({remaining:.0f}s, Score {allied_score}:{axis_score})"
+                end_reason = f"2. Scoreboard-Phase läuft ({remaining:.0f}s, Score {allied_score}:{axis_score})"
+                logger.info(f"[{server['name']}] 📊 Scoreboard-Auswertung wird gestartet!")
+            elif state.get("match_end_pending_at") is None:
+                # Zweites Mal ≤90s erkannt, aber warten auf ≤80s
+                state["match_end_pending_at"] = datetime.now(timezone.utc)
+                logger.info(f"[{server['name']}] ⏱️ 2. Mal Timer ≤90s erkannt - Scoreboard-Phase aktiv, warte auf ≤80s für Auswertung")
         
         state["last_timer"] = remaining
     
