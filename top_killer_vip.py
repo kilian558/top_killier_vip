@@ -817,6 +817,7 @@ def process_server(server):
         remaining = live_stats.get("time_remaining")
         allied_score = live_stats.get("allied_score", 0)
         axis_score = live_stats.get("axis_score", 0)
+        logger.info(f"[{server['name']}] 🔍 Live Stats: Timer={remaining}, Score {allied_score}:{axis_score}")
     
     # Fallback: gamestate + round_time_remaining
     if remaining is None:
@@ -851,6 +852,9 @@ def process_server(server):
         
         if remaining is None:
             remaining = get_round_time_remaining(server)
+    
+    # Debug: Zeige finale Werte
+    logger.info(f"[{server['name']}] 📊 Match State: Timer={remaining}, Score {allied_score}:{axis_score}, Match Rewarded={state['match_rewarded']}, Timer <90s gesehen={state.get('timer_below_90s_seen', False)}")
 
     # Hole Logs für Kill-Tracking
     logs = get_historical_logs(server)
