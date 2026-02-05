@@ -120,6 +120,19 @@ RESTART_MINUTE = 30
 
 last_restart_date = None
 
+EMOJI_TARGET = "\U0001F3AF"
+EMOJI_REFRESH = "\U0001F501"
+EMOJI_TROPHY = "\U0001F3C6"
+EMOJI_MEDAL_1 = "\U0001F947"
+EMOJI_MEDAL_2 = "\U0001F948"
+EMOJI_MEDAL_3 = "\U0001F949"
+EMOJI_STAR = "\u25AB\ufe0f"
+EMOJI_GIFT = "\U0001F381"
+EMOJI_BAR_CHART = "\U0001F4CA"
+EMOJI_VIP = "\U0001F451"
+EMOJI_CHECK = "\u2713"
+EMOJI_CROSS = "\u2717"
+
 def signal_handler(sig, frame):
     global shutdown_requested
     logger.info(f"\n[SHUTDOWN] Signal {sig} empfangen - Bot wird beendet...")
@@ -363,7 +376,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     
     # Embed erstellen
     embed = discord.Embed(
-        title=f"ðŸŽ¯ Live Match Stats - {server['name']}",
+        title=f"{EMOJI_TARGET} Live Match Stats - {server['name']}",
         description=f"**Map:** {current_map}\n**Match Start:** <t:{int(state['match_start'].timestamp())}:R>" if state['match_start'] else f"**Map:** {current_map}",
         color=0x00ff00,
         timestamp=datetime.now(timezone.utc)
@@ -372,14 +385,14 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     if sorted_killers:
         top_text = ""
         for rank, (steam_id, data) in enumerate(sorted_killers, 1):
-            emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰"}.get(rank, "â–«ï¸")
+            emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}.get(rank, EMOJI_STAR)
             top_text += f"{emoji} **{data['name'][:25]}** - {data['kills']} Kills\n"
         
         embed.add_field(name="Top 10 Killer", value=top_text or "Noch keine Kills", inline=False)
     else:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
     
-    embed.set_footer(text="ðŸ”„ Auto-Update alle 30 Sekunden")
+    embed.set_footer(text=f"{EMOJI_REFRESH} Auto-Update alle 30 Sekunden")
     
     return embed
 
@@ -395,29 +408,29 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
     )[:10]
     
     embed = discord.Embed(
-        title=f"ðŸ† Match beendet - {server['name']}",
+        title=f"{EMOJI_TROPHY} Match beendet - {server['name']}",
         description=f"**Map:** {current_map}",
         color=0xffd700,
         timestamp=datetime.now(timezone.utc)
     )
     
     if top_winners:
-        winner_text = "ðŸ¥‡ Platz 1: +72 Stunden | ðŸ¥ˆ Platz 2: +48 Stunden | ðŸ¥‰ Platz 3-5: +24 Stunden\n\n"
+        winner_text = f"{EMOJI_MEDAL_1} Platz 1: +72 Stunden | {EMOJI_MEDAL_2} Platz 2: +48 Stunden | {EMOJI_MEDAL_3} Platz 3-5: +24 Stunden\n\n"
         for rank, steam_id, data, hours, success in top_winners:
-            emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰", 4: "4ï¸âƒ£", 5: "5ï¸âƒ£"}.get(rank, f"#{rank}")
-            status = "âœ“" if success else "âœ—"
-            winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills â†’ +{hours}h VIP\n"
+            emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3, 4: "4\ufe0f\u20e3", 5: "5\ufe0f\u20e3"}.get(rank, f"#{rank}")
+            status = EMOJI_CHECK if success else EMOJI_CROSS
+            winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills -> +{hours}h VIP\n"
         
-        embed.add_field(name="ðŸŽ VIP Belohnungen vergeben", value=winner_text, inline=False)
+        embed.add_field(name=f"{EMOJI_GIFT} VIP Belohnungen vergeben", value=winner_text, inline=False)
     
     if sorted_killers:
         top_text = ""
         vip_ids = get_vip_ids(server)
         for rank, (steam_id, data) in enumerate(sorted_killers, 1):
-            has_vip = "ðŸ‘‘" if steam_id in vip_ids else ""
+            has_vip = EMOJI_VIP if steam_id in vip_ids else ""
             top_text += f"{rank}. **{data['name'][:25]}** - {data['kills']} Kills {has_vip}\n"
         
-        embed.add_field(name="ðŸ“Š Top 10 Gesamt", value=top_text, inline=False)
+        embed.add_field(name=f"{EMOJI_BAR_CHART} Top 10 Gesamt", value=top_text, inline=False)
     
     embed.set_footer(text="Match abgeschlossen")
     
@@ -733,6 +746,8 @@ async def on_ready():
         daily_restart_check.start()
         logger.info("âœ“ Daily-Restart Task gestartet")
 
+    save_state(force=True)
+
 
 async def main():
     """Hauptfunktion"""
@@ -751,6 +766,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        ensure_data_dir()
         load_state()
         asyncio.run(main())
     except KeyboardInterrupt:
