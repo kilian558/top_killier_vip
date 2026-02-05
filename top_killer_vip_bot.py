@@ -536,19 +536,30 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     if timer_remaining is None or (allied_score == 0 and axis_score == 0):
         gamestate = get_gamestate(server)
         if isinstance(gamestate, dict):
+            # Debug: Zeige gamestate Struktur
+            logger.info(f"[{server['name']}] Gamestate Keys: {list(gamestate.keys())}")
+            
             # Timer aus gamestate
             if timer_remaining is None:
-                timer_str = gamestate.get("remaining_time") or gamestate.get("time_remaining")
+                # Versuche alle möglichen Timer-Felder
+                timer_str = (
+                    gamestate.get("remaining_time") or 
+                    gamestate.get("time_remaining") or
+                    gamestate.get("raw_time_remaining")
+                )
+                
                 if timer_str:
+                    logger.info(f"[{server['name']}] Timer String aus gamestate: '{timer_str}'")
                     # Format: "0:11:51" oder "1:30:00" → Sekunden
                     try:
-                        parts = str(timer_str).split(":")
+                        parts = str(timer_str).strip().split(":")
                         if len(parts) == 3:
                             timer_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
                         elif len(parts) == 2:
                             timer_remaining = int(parts[0]) * 60 + int(parts[1])
-                    except:
-                        pass
+                        logger.info(f"[{server['name']}] Timer konvertiert: {timer_remaining}s")
+                    except Exception as e:
+                        logger.warning(f"[{server['name']}] Timer Parse Fehler: {e}")
             
             # Score aus gamestate
             if allied_score == 0 and axis_score == 0:
