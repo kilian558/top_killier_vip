@@ -34,6 +34,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 API_TOKEN = os.getenv("CRCON_API_TOKEN")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# VIP-Blacklist (keine VIP-Vergabe)
+VIP_EXCLUDE_IDS = {"76561198859268589"}
+VIP_EXCLUDE_NAMES = {"lexman"}
+
 if not API_TOKEN:
     logger.error("FEHLER: CRCON_API_TOKEN nicht gesetzt!")
     sys.exit(1)
@@ -156,6 +160,86 @@ def get_current_map(server) -> Tuple[str, str]:
         return "Unknown", None
 
 
+def get_live_scoreboard(server) -> List[Dict]:
+    """Hole Live-Scoreboard für aktuell verbundene Spieler"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_live_scoreboard",
+            timeout=15
+        )
+        response.raise_for_status()
+        return response.json().get("result", [])
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
+        return []
+
+
+def extract_scoreboard_players(scoreboard) -> List[Dict]:
+    """Extrahiere Spieler-Liste aus unterschiedlichen Scoreboard-Formaten"""
+    players: List[Dict] = []
+
+    if isinstance(scoreboard, dict):
+        for team_key in ("allied", "axis", "team1", "team2"):
+            team_players = scoreboard.get(team_key)
+            if isinstance(team_players, list):
+                players.extend([p for p in team_players if isinstance(p, dict)])
+
+        if not players and isinstance(scoreboard.get("stats"), list):
+            players = [p for p in scoreboard.get("stats", []) if isinstance(p, dict)]
+
+        if not players and isinstance(scoreboard.get("players"), list):
+            players = [p for p in scoreboard.get("players", []) if isinstance(p, dict)]
+
+        if not players:
+            for steam_id, data in scoreboard.items():
+                if isinstance(data, dict):
+                    data["player_id"] = steam_id
+                    players.append(data)
+                elif isinstance(data, list):
+                    players.extend([p for p in data if isinstance(p, dict)])
+
+    elif isinstance(scoreboard, list):
+        players = [p for p in scoreboard if isinstance(p, dict)]
+
+    return players
+
+
+def get_player_support_points(server, player_id: str = None, player_name: str = None) -> int | None:
+    """Lese Support-Punkte eines einzelnen Spielers aus dem Live-Scoreboard"""
+    scoreboard = get_live_scoreboard(server)
+    players = extract_scoreboard_players(scoreboard)
+
+    def normalize_name(name: str) -> str:
+        return (name or "").strip().casefold()
+
+    target_name = normalize_name(player_name) if player_name else None
+
+    for player in players:
+        pid = player.get("player_id") or player.get("steam_id") or player.get("playerid")
+        pname = player.get("name") or player.get("player_name") or player.get("player")
+
+        if player_id and pid and str(pid) == str(player_id):
+            return _extract_support_points(player)
+        if target_name and pname and normalize_name(pname) == target_name:
+            return _extract_support_points(player)
+
+    return None
+
+
+def _extract_support_points(player: Dict) -> int | None:
+    """Support-Punkte aus Spieler-Objekt extrahieren (verschiedene mögliche Keys)."""
+    for key in (
+        "support", "support_points", "support_score", "score_support",
+        "supportScore", "supportPoints", "supp"
+    ):
+        if key in player and player[key] is not None:
+            try:
+                return int(player[key])
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
 def get_vip_ids(server) -> set:
     """Hole alle Spieler-IDs mit VIP"""
     try:
@@ -171,9 +255,7 @@ def get_vip_ids(server) -> set:
         return set()
 
 
-
-
-def get_vip_expiration(server, steam_id: str):
+def get_vip_expiration(server, steam_id: str) -> str | None:
     """Hole VIP-Expiration fuer eine Spieler-ID."""
     try:
         response = server["session"].get(
@@ -218,7 +300,18 @@ def parse_vip_expiration(expiration: str) -> datetime:
             return datetime.now(timezone.utc)
 
 
-def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
+def _compute_award_expiration(server, steam_id: str, hours: int) -> str | None:
+    current_exp = get_vip_expiration(server, steam_id)
+    if is_lifetime_vip(current_exp):
+        return None
+    if current_exp:
+        base_time = parse_vip_expiration(current_exp)
+    else:
+        base_time = datetime.now(timezone.utc)
+    return (base_time + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+
+def add_vip_hours(server, steam_id: str, player_name: str, hours: int, expiration: str | None = None) -> bool:
     """Fuege VIP mit angegebenen Stunden hinzu"""
     try:
         current_exp = get_vip_expiration(server, steam_id)
@@ -241,11 +334,9 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
                     f"{remove_response.status_code} - {remove_response.text[:200]}"
                 )
 
-            base_time = parse_vip_expiration(current_exp)
-        else:
-            base_time = datetime.now(timezone.utc)
-
-        expiration = (base_time + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+        expiration = expiration or _compute_award_expiration(server, steam_id, hours)
+        if not expiration:
+            return False
 
         payload = {
             "player_id": steam_id,
@@ -260,10 +351,10 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
         )
 
         if response.status_code == 200:
-            logger.info(f"OK VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
+            logger.info(f"✓ VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
             return True
         else:
-            logger.error(f"X VIP-Fehler fuer {player_name}: {response.status_code} - {response.text[:200]}")
+            logger.error(f"✗ VIP-Fehler fuer {player_name}: {response.status_code} - {response.text[:200]}")
             return False
 
     except Exception as e:
@@ -271,7 +362,7 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
         return False
 
 
-def add_vip_24h(server, steam_id: str, player_name: str) -> bool:(server, steam_id: str, player_name: str) -> bool:
+    def add_vip_24h(server, steam_id: str, player_name: str) -> bool:
     """Füge 24h VIP hinzu (Legacy-Funktion)"""
     return add_vip_hours(server, steam_id, player_name, 24)
 
@@ -311,7 +402,7 @@ def send_discord_log(message: str):
 
 
 def process_match_end(server, state: Dict):
-    """Verarbeite Match-Ende und vergebe VIP an Top 5"""
+    """Verarbeite Match-Ende und vergebe VIP an Top 3"""
     if state["match_rewarded"]:
         return
     
@@ -327,67 +418,206 @@ def process_match_end(server, state: Dict):
         key=lambda x: x[1]["kills"],
         reverse=True
     )
-    
-    # Hole VIP-Listen pro Server (fuer Cross-Server Vergabe)
-    vip_ids_by_server = {s["base_url"]: get_vip_ids(s) for s in servers}
-    
-    # Filtere Top 5 ohne VIP
-    top_killers_no_vip = [
-        (steam_id, data) for steam_id, data in sorted_killers
-        if steam_id not in vip_ids_by_server[server["base_url"]]
-    ][:5]
-    
-    if not top_killers_no_vip:
-        logger.info(f"[{server['name']}] Alle Top-Killer haben bereits VIP.")
-        state["match_rewarded"] = True
-        return
-    
+
+    # Hole VIP-Liste
+    vip_ids = get_vip_ids(server)
+
     # Erstelle Discord-Log
     current_map, _ = get_current_map(server)
     discord_msg = f"**🏆 Match beendet auf {server['name']}**\n"
     discord_msg += f"Map: {current_map}\n\n"
-    discord_msg += "**Top 5 Killer ohne VIP erhalten VIP-Belohnungen:**\n"
-    discord_msg += "🥇 Platz 1: +72 Stunden | 🥈 Platz 2: +48 Stunden | 🥉 Platz 3-5: +24 Stunden\n\n"
-    
-    # VIP-Zeiten je nach Platzierung
-    vip_hours = {1: 72, 2: 48, 3: 24, 4: 24, 5: 24}
-    
-    # Vergebe VIP an Top 5 ohne VIP
-    for rank, (steam_id, data) in enumerate(top_killers_no_vip, 1):
+
+    awarded_ids: set[str] = set()
+
+    # Top Killer Benachrichtigungen (bis 3 VIP vergeben)
+    discord_msg += "**Top Killer Benachrichtigungen (bis 3 VIP vergeben):**\n"
+
+    killer_results = []
+    vip_awarded_count = 0
+    last_rank_awarded = 0
+
+    for rank, (steam_id, data) in enumerate(sorted_killers, 1):
+        if vip_awarded_count >= 3:
+            break
+
         player_name = data["name"]
         kills = data["kills"]
-        hours = vip_hours[rank]
-        
-        # Vergebe VIP auf allen Servern
-        per_server_success = []
-        for target_server in servers:
-            target_vips = vip_ids_by_server.get(target_server["base_url"], set())
-            if steam_id in target_vips:
-                logger.info(
-                    f"[{server['name']}] {player_name} ({steam_id}) hat bereits VIP auf {target_server['name']}, skip"
-                )
-                per_server_success.append(True)
-                continue
-            per_server_success.append(add_vip_hours(target_server, steam_id, player_name, hours))
+        has_vip = steam_id in vip_ids
+        is_excluded = str(steam_id) in VIP_EXCLUDE_IDS or (player_name or "").strip().casefold() in VIP_EXCLUDE_NAMES
 
-        success = all(per_server_success)
-        
-        # VORERST KEINE PM SENDEN
-        # pm_message = (
-        #     f"🏆 GLÜCKWUNSCH! 🏆\n"
-        #     f"Du warst Platz {rank} der Top Killer ({kills} Kills) in diesem Match!\n"
-        #     f"Als Belohnung erhältst du +{hours} Stunden VIP!"
-        # )
-        # send_private_message(server, steam_id, player_name, pm_message)
-        
-        # Detailliertes Logging
-        rank_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
-        status = "✓" if success else "✗"
-        
-        logger.info(f"[{server['name']}] {status} Platz {rank}: {player_name} ({steam_id}) - {kills} Kills - +{hours}h VIP")
-        
-        # Füge zu Discord-Log hinzu
-        discord_msg += f"{status} {rank_emoji.get(rank, f'#{rank}')} **{player_name}** - {kills} Kills → +{hours}h VIP\n"
+        support_points = get_player_support_points(server, player_id=steam_id, player_name=player_name)
+
+        award_success = False
+        expiration = None
+
+        if (not has_vip) and (not is_excluded) and vip_awarded_count < 3:
+            hours = 24
+            expiration = _compute_award_expiration(server, steam_id, hours)
+            if expiration:
+                award_success = add_vip_hours(server, steam_id, player_name, hours, expiration=expiration)
+            if award_success:
+                awarded_ids.add(steam_id)
+                vip_awarded_count += 1
+                last_rank_awarded = rank
+
+        killer_results.append({
+            "rank": rank,
+            "steam_id": steam_id,
+            "name": player_name,
+            "kills": kills,
+            "support_points": support_points,
+            "has_vip": has_vip,
+            "is_excluded": is_excluded,
+            "award_success": award_success,
+            "expiration": expiration
+        })
+
+    for result in killer_results:
+        if result["rank"] > last_rank_awarded:
+            continue
+
+        rank = result["rank"]
+        steam_id = result["steam_id"]
+        player_name = result["name"]
+        kills = result["kills"]
+        support_points = result["support_points"]
+        has_vip = result["has_vip"]
+        is_excluded = result["is_excluded"]
+        award_success = result["award_success"]
+        expiration = result["expiration"]
+
+        support_text = f" | Support: {support_points}" if support_points is not None else ""
+        rank_emoji = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+        if award_success:
+            pm_message = (
+                "🏆 CONGRATULATIONS! 🏆\n"
+                f"You placed Top Killer #{rank} with {kills} kills and had no VIP. "
+                f"Your VIP has been extended until {expiration}."
+            )
+            send_private_message(server, steam_id, player_name, pm_message)
+
+            logger.info(
+                f"[{server['name']}] ✓ Platz {rank}: {player_name} ({steam_id}) - {kills} Kills{support_text} - +24h VIP"
+            )
+            discord_msg += (
+                f"✓ {rank_emoji.get(rank, f'#{rank}')} **{player_name}** - {kills} Kills"
+                f"{support_text} → +24h VIP\n"
+            )
+        else:
+            if has_vip:
+                reason = "No VIP was granted because you already have VIP."
+            elif is_excluded:
+                reason = "No VIP was granted."
+            else:
+                reason = "No VIP was granted."
+
+            pm_message = (
+                "🏆 MATCH RESULT 🏆\n"
+                f"You placed Top Killer #{rank} with {kills} kills. {reason}"
+            )
+            send_private_message(server, steam_id, player_name, pm_message)
+
+            discord_msg += (
+                f"• {rank_emoji.get(rank, f'#{rank}')} **{player_name}** - {kills} Kills"
+                f"{support_text} → keine VIP (bereits VIP/ausgenommen)\n"
+            )
+
+    # Top Support Benachrichtigungen (bis 2 VIP vergeben)
+    scoreboard = get_live_scoreboard(server)
+    players = extract_scoreboard_players(scoreboard)
+    support_candidates = []
+    for player in players:
+        pid = player.get("player_id") or player.get("steam_id") or player.get("playerid")
+        pname = player.get("name") or player.get("player_name") or player.get("player") or "Unknown"
+        points = _extract_support_points(player)
+        if pid and points is not None:
+            if str(pid) in VIP_EXCLUDE_IDS or (pname or "").strip().casefold() in VIP_EXCLUDE_NAMES:
+                continue
+            support_candidates.append((pid, pname, points))
+
+    support_candidates.sort(key=lambda x: x[2], reverse=True)
+    discord_msg += "\n**Top Support Benachrichtigungen (bis 2 VIP vergeben):**\n"
+
+    support_results = []
+    support_awarded_count = 0
+    last_support_rank_awarded = 0
+
+    for rank, (pid, pname, points) in enumerate(support_candidates, 1):
+        if support_awarded_count >= 2:
+            break
+
+        has_vip = pid in vip_ids
+        is_excluded = str(pid) in VIP_EXCLUDE_IDS or (pname or "").strip().casefold() in VIP_EXCLUDE_NAMES
+
+        award_success = False
+        expiration = None
+
+        if (not has_vip) and (pid not in awarded_ids) and (not is_excluded) and support_awarded_count < 2:
+            hours = 24
+            expiration = _compute_award_expiration(server, pid, hours)
+            if expiration:
+                award_success = add_vip_hours(server, pid, pname, hours, expiration=expiration)
+            if award_success:
+                awarded_ids.add(pid)
+                support_awarded_count += 1
+                last_support_rank_awarded = rank
+
+        support_results.append({
+            "rank": rank,
+            "steam_id": pid,
+            "name": pname,
+            "points": points,
+            "has_vip": has_vip,
+            "is_excluded": is_excluded,
+            "award_success": award_success,
+            "expiration": expiration
+        })
+
+    for result in support_results:
+        if result["rank"] > last_support_rank_awarded:
+            continue
+
+        rank = result["rank"]
+        pid = result["steam_id"]
+        pname = result["name"]
+        points = result["points"]
+        has_vip = result["has_vip"]
+        is_excluded = result["is_excluded"]
+        award_success = result["award_success"]
+        expiration = result["expiration"]
+
+        rank_emoji = {1: "🥇", 2: "🥈"}
+
+        if award_success:
+            pm_message = (
+                "🛠️ CONGRATULATIONS! 🛠️\n"
+                f"You placed Top Support #{rank} with {points} support points and had no VIP. "
+                f"Your VIP has been extended until {expiration}."
+            )
+            send_private_message(server, pid, pname, pm_message)
+
+            logger.info(
+                f"[{server['name']}] ✓ Support Platz {rank}: {pname} ({pid}) - Support: {points} - +24h VIP"
+            )
+            discord_msg += f"✓ {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → +24h VIP\n"
+        else:
+            if has_vip:
+                reason = "No VIP was granted because you already have VIP."
+            elif pid in awarded_ids:
+                reason = "No VIP was granted because you already received a VIP as Top Killer."
+            elif is_excluded:
+                reason = "No VIP was granted."
+            else:
+                reason = "No VIP was granted."
+
+            pm_message = (
+                "🛠️ MATCH RESULT 🛠️\n"
+                f"You placed Top Support #{rank} with {points} support points. {reason}"
+            )
+            send_private_message(server, pid, pname, pm_message)
+
+            discord_msg += f"• {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → keine VIP (bereits VIP/ausgenommen)\n"
     
     # Zeige alle Top 10 zur Info
     discord_msg += "\n**Top 10 Gesamt:**\n"
@@ -396,7 +626,7 @@ def process_match_end(server, state: Dict):
         discord_msg += f"{rank}. {data['name']} - {data['kills']} Kills {has_vip}\n"
     
     send_discord_log(discord_msg)
-    logger.info(f"[{server['name']}] ✓ VIP an Top 5 Killer vergeben (72h/48h/24h/24h/24h)")
+    logger.info(f"[{server['name']}] ✓ Match abgeschlossen – Punkteanzeige gesendet")
     
     state["match_rewarded"] = True
 

@@ -484,9 +484,9 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
     )
     
     if top_winners:
-        winner_text = f"{EMOJI_MEDAL_1} Platz 1: +72 Stunden | {EMOJI_MEDAL_2} Platz 2: +48 Stunden | {EMOJI_MEDAL_3} Platz 3-5: +24 Stunden\n\n"
+        winner_text = f"{EMOJI_MEDAL_1}{EMOJI_MEDAL_2}{EMOJI_MEDAL_3} Platz 1-3: +24 Stunden\n\n"
         for rank, steam_id, data, hours, success in top_winners:
-            emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3, 4: "4\ufe0f\u20e3", 5: "5\ufe0f\u20e3"}.get(rank, f"#{rank}")
+            emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}.get(rank, f"#{rank}")
             status = EMOJI_CHECK if success else EMOJI_CROSS
             winner_text += f"{status} {emoji} **{data['name'][:25]}** - {data['kills']} Kills -> +{hours}h VIP\n"
         
@@ -507,7 +507,7 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
 
 
 async def process_match_end(server, state: Dict, channel):
-    """Verarbeite Match-Ende und vergebe VIP an Top 5"""
+    """Verarbeite Match-Ende und vergebe VIP an Top 3"""
     if state["match_rewarded"]:
         return
     
@@ -528,21 +528,19 @@ async def process_match_end(server, state: Dict, channel):
     # Hole VIP-Listen pro Server (fuer Cross-Server Vergabe)
     vip_ids_by_server = {s["base_url"]: get_vip_ids(s) for s in servers}
     
-    # Filtere Top 5 ohne VIP
+    # Filtere Top 3 ohne VIP
     top_killers_no_vip = [
         (steam_id, data) for steam_id, data in sorted_killers
         if steam_id not in vip_ids_by_server[server["base_url"]]
-    ][:5]
+    ][:3]
     
     if not top_killers_no_vip:
         logger.info(f"[{server['name']}] Alle Top-Killer haben bereits VIP.")
-        state["match_rewarded"] = True
-        return
     
     # VIP-Zeiten je nach Platzierung
-    vip_hours = {1: 72, 2: 48, 3: 24, 4: 24, 5: 24}
+    vip_hours = {1: 24, 2: 24, 3: 24}
     
-    # Vergebe VIP an Top 5 ohne VIP
+    # Vergebe VIP an Top 3 ohne VIP
     top_winners = []
     for rank, (steam_id, data) in enumerate(top_killers_no_vip, 1):
         player_name = data["name"]
@@ -564,8 +562,8 @@ async def process_match_end(server, state: Dict, channel):
         success = all(per_server_success)
         top_winners.append((rank, steam_id, data, hours, success))
         
-        rank_emoji = {1: "ðŸ¥‡", 2: "ðŸ¥ˆ", 3: "ðŸ¥‰", 4: "4ï¸âƒ£", 5: "5ï¸âƒ£"}
-        status = "âœ“" if success else "âœ—"
+        rank_emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}
+        status = EMOJI_CHECK if success else EMOJI_CROSS
         logger.info(f"[{server['name']}] {status} Platz {rank}: {player_name} ({steam_id}) - {kills} Kills - +{hours}h VIP")
     
     # "Freeze" die Live-Message mit finalem Embed
@@ -579,8 +577,22 @@ async def process_match_end(server, state: Dict, channel):
         except Exception as e:
             logger.error(f"Fehler beim Einfrieren der Live-Message: {e}")
     
+    # Sende Benachrichtigung, sobald Match beendet und finale Punkteanzeige verfügbar ist
+    try:
+        if state["live_message"]:
+            await channel.send(
+                f"🏁 **Match beendet auf {server['name']}** – Die finale Punkteanzeige ist jetzt verfügbar."
+            )
+        else:
+            await channel.send(
+                f"🏁 **Match beendet auf {server['name']}** – Die finale Punkteanzeige ist jetzt verfügbar.",
+                embed=final_embed
+            )
+    except Exception as e:
+        logger.error(f"Fehler beim Senden der Match-Ende Nachricht: {e}")
+    
     state["match_rewarded"] = True
-    logger.info(f"[{server['name']}] âœ“ VIP an Top 5 Killer vergeben (72h/48h/24h/24h/24h)")
+    logger.info(f"[{server['name']}] ✓ Match abgeschlossen – Punkteanzeige gesendet")
 
 
 async def process_server(server, channel):
