@@ -837,8 +837,20 @@ def process_server(server):
     match_ended_detected = False
     if logs:
         for log in logs[-20:]:  # Prüfe die letzten 20 Logs
-            log_type = log.get("type", "").upper()
-            if "MATCH" in log_type and ("END" in log_type or "ENDED" in log_type):
+            # Prüfe alle möglichen Felder
+            log_type = str(log.get("type", "")).upper()
+            log_action = str(log.get("action", "")).upper()
+            log_message = str(log.get("message", "")).upper()
+            log_content = str(log.get("content", "")).upper()
+            
+            # Kombiniere alle Felder zum Durchsuchen
+            full_log = f"{log_type} {log_action} {log_message} {log_content}"
+            
+            # Debug: Log alle MATCH-bezogenen Einträge
+            if "MATCH" in full_log:
+                logger.info(f"[{server['name']}] [DEBUG] Log mit MATCH: type='{log.get('type')}', action='{log.get('action')}', message='{log.get('message', '')[:100]}'")
+            
+            if "MATCH" in full_log and ("END" in full_log or "ENDED" in full_log):
                 match_ended_detected = True
                 logger.info(f"[{server['name']}] 🏁 MATCH ENDED Event erkannt in Logs!")
                 break
