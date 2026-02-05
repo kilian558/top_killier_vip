@@ -293,6 +293,11 @@ def _extract_support_points(player: Dict) -> Optional[int]:
     ):
         if key in player and player[key] is not None:
             try:
+                if isinstance(player[key], dict):
+                    for subkey in ("score", "value", "total", "points"):
+                        if subkey in player[key] and player[key][subkey] is not None:
+                            return int(player[key][subkey])
+                    return None
                 return int(player[key])
             except (ValueError, TypeError):
                 return None
@@ -732,13 +737,17 @@ async def process_server(server, channel):
             player_count += 1
 
         support_points = _extract_support_points(player)
-        if support_points is not None and support_points > 0:
+        if support_points is not None:
             state["match_support"][steam_id] = {"name": player_name, "support": support_points}
 
     if not state["match_support"] and not state.get("support_debug_logged"):
         if players:
             sample_keys = list(players[0].keys())
-            logger.info(f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys}")
+            sample_support = players[0].get("support")
+            logger.info(
+                f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys} | "
+                f"support={sample_support} (type={type(sample_support).__name__})"
+            )
         state["support_debug_logged"] = True
             
     logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(players)}")
