@@ -92,6 +92,7 @@ server_states = {
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
         "match_support": defaultdict(lambda: {"name": "", "support": 0}),
+        "support_available": False,
         "baseline_kills": {},
         "kill_offsets": {},
         "match_start": None,
@@ -248,6 +249,20 @@ def get_live_scoreboard(server):
         return result
     except Exception as e:
         logger.error(f"Fehler beim Abrufen des Scoreboards von {server['name']}: {e}")
+        return None
+
+
+def get_players(server):
+    """Hole Live-Players vom Server (enthÃ¤lt oft Support-Punkte)"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_players",
+            timeout=15
+        )
+        response.raise_for_status()
+        return response.json().get("result", [])
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen der Players von {server['name']}: {e}")
         return None
 
 
@@ -481,6 +496,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     """Erstelle Live-Update Embed"""
     match_kills = state["match_kills"]
     match_support = state.get("match_support", {})
+    support_available = state.get("support_available", False)
     
     # Sortiere nach Kills
     sorted_killers = sorted(
@@ -508,7 +524,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
 
     # Top Support (falls verfügbar)
-    if match_support:
+    if match_support and support_available:
         sorted_support = sorted(
             match_support.items(),
             key=lambda x: x[1]["support"],
@@ -519,6 +535,8 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
             emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}.get(rank, EMOJI_STAR)
             support_text += f"{emoji} **{data['name'][:25]}** - {data['support']} Support\n"
         embed.add_field(name="Top 10 Support", value=support_text or "Keine Support-Daten", inline=False)
+    else:
+        embed.add_field(name="Top 10 Support", value="Support-Punkte sind erst nach Match-Ende verfÃ¼gbar.", inline=False)
     
     embed.set_footer(text=f"{EMOJI_REFRESH} Auto-Update alle 30 Sekunden")
     
@@ -728,10 +746,17 @@ async def process_server(server, channel):
     # Support-Daten bevorzugt aus Map-Scoreboard (falls verfÃ¼gbar)
     support_players = None
     map_players = None
+    players_endpoint_players = None
+    players_endpoint = get_players(server)
+    if players_endpoint:
+        players_endpoint_players = extract_scoreboard_players(players_endpoint)
+        if any(_extract_support_points(p) is not None for p in players_endpoint_players):
+            support_players = players_endpoint_players
+
     map_scoreboard = get_map_scoreboard(server)
     if map_scoreboard:
         map_players = extract_scoreboard_players(map_scoreboard)
-        if any(_extract_support_points(p) is not None for p in map_players):
+        if support_players is None and any(_extract_support_points(p) is not None for p in map_players):
             support_players = map_players
 
     if support_players is None:
@@ -762,6 +787,7 @@ async def process_server(server, channel):
             state["match_kills"][steam_id] = {"name": player_name, "kills": match_kills}
             player_count += 1
 
+    support_nonzero_found = False
     for player in support_players:
         if not isinstance(player, dict):
             continue
@@ -773,6 +799,10 @@ async def process_server(server, channel):
         support_points = _extract_support_points(player)
         if support_points is not None:
             state["match_support"][steam_id] = {"name": player_name, "support": support_points}
+            if support_points > 0:
+                support_nonzero_found = True
+
+    state["support_available"] = support_nonzero_found
 
     if not state["support_debug_logged"]:
         sample_source = support_players[0] if support_players else None
@@ -782,8 +812,12 @@ async def process_server(server, channel):
             logger.info(
                 f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys} | "
                 f"support={sample_support} (type={type(sample_support).__name__}) | "
-                f"Quelle={'map' if (map_players is not None and support_players is map_players) else 'live'}"
+                f"Quelle={'players' if (players_endpoint_players is not None and support_players is players_endpoint_players) else ('map' if (map_players is not None and support_players is map_players) else 'live')}"
             )
+        if players_endpoint is None:
+            logger.info(f"[{server['name']}] Support-Debug: Players-Endpoint nicht verfÃ¼gbar (API/Permission?).")
+        if map_scoreboard is None:
+            logger.info(f"[{server['name']}] Support-Debug: Map-Scoreboard nicht verfÃ¼gbar (API/Permission?).")
         state["support_debug_logged"] = True
             
     logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(players)}")
