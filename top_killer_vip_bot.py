@@ -550,16 +550,21 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
                 
                 if timer_str:
                     logger.info(f"[{server['name']}] Timer String aus gamestate: '{timer_str}'")
-                    # Format: "0:11:51" oder "1:30:00" → Sekunden
                     try:
-                        parts = str(timer_str).strip().split(":")
-                        if len(parts) == 3:
-                            timer_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-                        elif len(parts) == 2:
-                            timer_remaining = int(parts[0]) * 60 + int(parts[1])
+                        # Zuerst versuchen als Float (z.B. '4749.0' = Sekunden direkt)
+                        timer_remaining = float(timer_str)
                         logger.info(f"[{server['name']}] Timer konvertiert: {timer_remaining}s")
-                    except Exception as e:
-                        logger.warning(f"[{server['name']}] Timer Parse Fehler: {e}")
+                    except ValueError:
+                        # Fallback: Format "0:11:51" oder "1:30:00" → Sekunden
+                        try:
+                            parts = str(timer_str).strip().split(":")
+                            if len(parts) == 3:
+                                timer_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                            elif len(parts) == 2:
+                                timer_remaining = int(parts[0]) * 60 + int(parts[1])
+                            logger.info(f"[{server['name']}] Timer konvertiert (HH:MM:SS): {timer_remaining}s")
+                        except Exception as e:
+                            logger.warning(f"[{server['name']}] Timer Parse Fehler: {e}")
             
             # Score aus gamestate
             if allied_score == 0 and axis_score == 0:
