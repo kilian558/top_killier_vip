@@ -518,6 +518,9 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     allied_score = live_stats.get("allied_score", 0)
     axis_score = live_stats.get("axis_score", 0)
     
+    # Debug: Zeige was wir bekommen haben
+    logger.info(f"[{server['name']}] Live Stats für Embed: Timer={timer_remaining}, Score={allied_score}:{axis_score}, Stats-Keys={list(live_stats.keys()) if live_stats else 'None'}")
+    
     # Sortiere nach Kills
     sorted_killers = sorted(
         match_kills.items(),
@@ -536,8 +539,11 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
         elif timer_remaining <= 90:
             timer_emoji = "🟡"  # Scoreboard-Phase
         timer_text = f"**{timer_emoji} Timer:** {minutes:02d}:{seconds:02d}\n"
+    else:
+        # Fallback: Zeige dass Timer nicht verfügbar ist
+        timer_text = "**⏱️ Timer:** Lädt...\n"
     
-    score_text = f"**📊 Score:** {allied_score}:{axis_score}\n" if allied_score > 0 or axis_score > 0 else ""
+    score_text = f"**📊 Score:** {allied_score}:{axis_score}\n" if allied_score > 0 or axis_score > 0 else "**📊 Score:** 0:0\n"
     
     # Embed erstellen
     match_info = f"**Map:** {current_map}\n{timer_text}{score_text}"
