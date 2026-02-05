@@ -836,14 +836,20 @@ def process_server(server):
     logs = get_historical_logs(server)
     
     # Match-Ende Erkennung: 2. Mal Timer ≤90s ODER Score 5:x
-    # Regel #1: Timer fällt zum 2. Mal auf ≤90s = Scoreboard-Phase startet
-    # Regel #2: Auswertung erst bei ≤80s (nach 10s Scoreboard-Phase)
-    # Regel #3: Score 5:x = Sofortiges Match Ende
+    # Regel #1: Score 5:x = Sofortiges Match Ende & Auswertung
+    # Regel #2: Timer fällt zum 2. Mal auf ≤90s = Scoreboard-Phase startet
+    # Regel #3: Auswertung bei ≤80s (nach 10s Scoreboard-Phase)
     match_ended = False
     end_reason = ""
     
-    # Tracke Timer-Verlauf
-    if remaining is not None:
+    # Prüfe Score 5:x zuerst (sofortige Auswertung)
+    if (allied_score >= 5 or axis_score >= 5) and not state["match_rewarded"]:
+        match_ended = True
+        end_reason = f"Score 5:x erreicht ({allied_score}:{axis_score}) - Sofortige Auswertung"
+        logger.info(f"[{server['name']}] 🏆 {end_reason}")
+    
+    # Tracke Timer-Verlauf (nur wenn nicht schon durch Score 5:x beendet)
+    elif remaining is not None:
         # Timer stieg wieder über 90s → Reset Flag (für nächstes Match oder nach Pause)
         if state["last_timer"] is not None and state["last_timer"] <= 90 and remaining > 90:
             state["timer_below_90s_seen"] = False
@@ -866,11 +872,6 @@ def process_server(server):
                 logger.info(f"[{server['name']}] ⏱️ 2. Mal Timer ≤90s erkannt - Scoreboard-Phase aktiv, warte auf ≤80s für Auswertung")
         
         state["last_timer"] = remaining
-    
-    # Fallback: Score 5:x
-    if not match_ended and (allied_score >= 5 or axis_score >= 5) and not state["match_rewarded"]:
-        match_ended = True
-        end_reason = f"Score 5:x erreicht ({allied_score}:{axis_score})"
     
     if match_ended and state["current_match_id"]:
         logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason}")
