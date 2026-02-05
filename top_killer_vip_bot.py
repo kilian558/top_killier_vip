@@ -91,6 +91,7 @@ server_states = {
     server["base_url"]: {
         "current_match_id": None,
         "match_kills": defaultdict(lambda: {"name": "", "kills": 0}),
+        "match_support": defaultdict(lambda: {"name": "", "support": 0}),
         "baseline_kills": {},
         "kill_offsets": {},
         "match_start": None,
@@ -99,7 +100,8 @@ server_states = {
         "live_message_id": None,
         "last_update": None,   # Timestamp des letzten Updates
         "inactive_since": None,
-        "current_map": None
+        "current_map": None,
+        "support_debug_logged": False
     }
     for server in servers
 }
@@ -283,6 +285,30 @@ def extract_scoreboard_players(scoreboard) -> List[Dict]:
     return players
 
 
+def _extract_support_points(player: Dict) -> Optional[int]:
+    """Support-Punkte aus Spieler-Objekt extrahieren (verschiedene mögliche Keys)."""
+    for key in (
+        "support", "support_points", "support_score", "score_support",
+        "supportScore", "supportPoints", "supp"
+    ):
+        if key in player and player[key] is not None:
+            try:
+                return int(player[key])
+            except (ValueError, TypeError):
+                return None
+
+    score_block = player.get("score") or player.get("scores")
+    if isinstance(score_block, dict):
+        for key in ("support", "support_score", "support_points"):
+            if key in score_block and score_block[key] is not None:
+                try:
+                    return int(score_block[key])
+                except (ValueError, TypeError):
+                    return None
+
+    return None
+
+
 def get_current_map(server) -> Tuple[str, str]:
     """Hole aktuelle Map und Match-ID"""
     try:
@@ -435,6 +461,7 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
 def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     """Erstelle Live-Update Embed"""
     match_kills = state["match_kills"]
+    match_support = state.get("match_support", {})
     
     # Sortiere nach Kills
     sorted_killers = sorted(
@@ -460,6 +487,19 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
         embed.add_field(name="Top 10 Killer", value=top_text or "Noch keine Kills", inline=False)
     else:
         embed.add_field(name="Top 10 Killer", value="Noch keine Kills aufgezeichnet", inline=False)
+
+    # Top Support (falls verfügbar)
+    if match_support:
+        sorted_support = sorted(
+            match_support.items(),
+            key=lambda x: x[1]["support"],
+            reverse=True
+        )[:10]
+        support_text = ""
+        for rank, (steam_id, data) in enumerate(sorted_support, 1):
+            emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}.get(rank, EMOJI_STAR)
+            support_text += f"{emoji} **{data['name'][:25]}** - {data['support']} Support\n"
+        embed.add_field(name="Top 10 Support", value=support_text or "Keine Support-Daten", inline=False)
     
     embed.set_footer(text=f"{EMOJI_REFRESH} Auto-Update alle 30 Sekunden")
     
@@ -636,12 +676,14 @@ async def process_server(server, channel):
         logger.info(f"[{server['name']}] Neues Match gestartet: {match_id}")
         state["current_match_id"] = match_id
         state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
+        state["match_support"] = defaultdict(lambda: {"name": "", "support": 0})
         state["baseline_kills"] = {}
         state["kill_offsets"] = {}
         state["match_start"] = datetime.now(timezone.utc)
         state["match_rewarded"] = False
         state["live_message"] = None
         state["last_update"] = None
+        state["support_debug_logged"] = False
 
         # Baseline-Kills beim Matchstart setzen (damit Kills bei 0 starten)
         start_players = extract_scoreboard_players(scoreboard)
@@ -653,6 +695,7 @@ async def process_server(server, channel):
     
     # WICHTIG: Reset match_kills VOR dem Update, um alte Daten zu lÃ¶schen
     state["match_kills"].clear()
+    state["match_support"].clear()
     
     # Verarbeite Spieler-Stats
     player_count = 0
@@ -687,6 +730,16 @@ async def process_server(server, channel):
         if match_kills > 0:
             state["match_kills"][steam_id] = {"name": player_name, "kills": match_kills}
             player_count += 1
+
+        support_points = _extract_support_points(player)
+        if support_points is not None and support_points > 0:
+            state["match_support"][steam_id] = {"name": player_name, "support": support_points}
+
+    if not state["match_support"] and not state.get("support_debug_logged"):
+        if players:
+            sample_keys = list(players[0].keys())
+            logger.info(f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys}")
+        state["support_debug_logged"] = True
             
     logger.info(f"[{server['name']}] Verarbeitete Spieler mit Kills: {player_count}/{len(players)}")
 
