@@ -343,6 +343,20 @@ def _extract_support_points(player: Dict) -> Optional[int]:
     return None
 
 
+def get_live_game_stats(server) -> Dict:
+    """Hole Live-Game-Stats mit Timer und Score"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_live_game_stats",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json().get("result", {})
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen der Live-Stats von {server['name']}: {e}")
+        return {}
+
+
 def get_current_map(server) -> Tuple[str, str]:
     """Hole aktuelle Map und Match-ID"""
     try:
@@ -498,6 +512,12 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     match_support = state.get("match_support", {})
     support_available = state.get("support_available", False)
     
+    # Hole Live-Stats für Timer & Score
+    live_stats = get_live_game_stats(server)
+    timer_remaining = live_stats.get("time_remaining")
+    allied_score = live_stats.get("allied_score", 0)
+    axis_score = live_stats.get("axis_score", 0)
+    
     # Sortiere nach Kills
     sorted_killers = sorted(
         match_kills.items(),
@@ -505,11 +525,37 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
         reverse=True
     )[:10]
     
+    # Timer & Score formatieren
+    timer_text = ""
+    if timer_remaining is not None:
+        minutes = int(timer_remaining // 60)
+        seconds = int(timer_remaining % 60)
+        timer_emoji = "🟢"
+        if timer_remaining <= 80:
+            timer_emoji = "🔴"  # Kritisch - Auswertung läuft!
+        elif timer_remaining <= 90:
+            timer_emoji = "🟡"  # Scoreboard-Phase
+        timer_text = f"**{timer_emoji} Timer:** {minutes:02d}:{seconds:02d}\n"
+    
+    score_text = f"**📊 Score:** {allied_score}:{axis_score}\n" if allied_score > 0 or axis_score > 0 else ""
+    
     # Embed erstellen
+    match_info = f"**Map:** {current_map}\n{timer_text}{score_text}"
+    if state['match_start']:
+        match_info += f"**Match Start:** <t:{int(state['match_start'].timestamp())}:R>"
+    
+    # Farbe basierend auf Timer
+    color = 0x00ff00  # Grün
+    if timer_remaining is not None:
+        if timer_remaining <= 80:
+            color = 0xff0000  # Rot - Auswertung!
+        elif timer_remaining <= 90:
+            color = 0xffff00  # Gelb - Scoreboard
+    
     embed = discord.Embed(
         title=f"{EMOJI_TARGET} Live Match Stats - {server['name']}",
-        description=f"**Map:** {current_map}\n**Match Start:** <t:{int(state['match_start'].timestamp())}:R>" if state['match_start'] else f"**Map:** {current_map}",
-        color=0x00ff00,
+        description=match_info,
+        color=color,
         timestamp=datetime.now(timezone.utc)
     )
     
