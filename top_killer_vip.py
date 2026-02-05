@@ -171,37 +171,107 @@ def get_vip_ids(server) -> set:
         return set()
 
 
-def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
-    """Füge VIP mit angegebenen Stunden hinzu"""
+
+
+def get_vip_expiration(server, steam_id: str):
+    """Hole VIP-Expiration fuer eine Spieler-ID."""
     try:
-        # Setze VIP-Ablauf auf jetzt + X Stunden
-        expiration = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
-        
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_vip_ids",
+            timeout=10
+        )
+        response.raise_for_status()
+        vips = response.json().get("result", [])
+        for vip in vips:
+            if vip.get("player_id") == steam_id:
+                return vip.get("vip_expiration")
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen der VIP-Daten von {server['name']}: {e}")
+    return None
+
+
+def is_lifetime_vip(expiration) -> bool:
+    if not expiration:
+        return False
+    exp = str(expiration).strip().lower()
+    if exp.startswith(("permanent", "lifetime", "never")):
+        return True
+    if exp.startswith("3000-"):
+        return True
+    try:
+        year = int(exp.split("-", 1)[0])
+        return year >= 3000
+    except (ValueError, IndexError):
+        return False
+
+
+def parse_vip_expiration(expiration: str) -> datetime:
+    exp = expiration.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(exp)
+    except ValueError:
+        if "." in exp:
+            exp = exp.split(".", 1)[0]
+        try:
+            return datetime.strptime(exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return datetime.now(timezone.utc)
+
+
+def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
+    """Fuege VIP mit angegebenen Stunden hinzu"""
+    try:
+        current_exp = get_vip_expiration(server, steam_id)
+        if is_lifetime_vip(current_exp):
+            logger.info(
+                f"[{server['name']}] Lifetime VIP erkannt fuer {player_name} ({steam_id}) - keine Aenderung."
+            )
+            return True
+
+        if current_exp:
+            remove_payload = {"player_id": steam_id}
+            remove_response = server["session"].post(
+                f"{server['base_url']}/api/remove_vip",
+                json=remove_payload,
+                timeout=10
+            )
+            if remove_response.status_code != 200:
+                logger.warning(
+                    f"[{server['name']}] Entfernen von VIP fehlgeschlagen fuer {player_name}: "
+                    f"{remove_response.status_code} - {remove_response.text[:200]}"
+                )
+
+            base_time = parse_vip_expiration(current_exp)
+        else:
+            base_time = datetime.now(timezone.utc)
+
+        expiration = (base_time + timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
         payload = {
             "player_id": steam_id,
             "expiration": expiration,
             "description": f"Top Killer Belohnung (+{hours}h)"
         }
-        
+
         response = server["session"].post(
             f"{server['base_url']}/api/add_vip",
             json=payload,
             timeout=10
         )
-        
+
         if response.status_code == 200:
-            logger.info(f"✓ VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
+            logger.info(f"OK VIP (+{hours}h) vergeben an {player_name} ({steam_id}) auf {server['name']}")
             return True
         else:
-            logger.error(f"✗ VIP-Fehler für {player_name}: {response.status_code} - {response.text[:200]}")
+            logger.error(f"X VIP-Fehler fuer {player_name}: {response.status_code} - {response.text[:200]}")
             return False
-            
+
     except Exception as e:
-        logger.error(f"Fehler beim Vergeben von VIP für {player_name}: {e}")
+        logger.error(f"Fehler beim Vergeben von VIP fuer {player_name}: {e}")
         return False
 
 
-def add_vip_24h(server, steam_id: str, player_name: str) -> bool:
+def add_vip_24h(server, steam_id: str, player_name: str) -> bool:(server, steam_id: str, player_name: str) -> bool:
     """Füge 24h VIP hinzu (Legacy-Funktion)"""
     return add_vip_hours(server, steam_id, player_name, 24)
 
@@ -435,3 +505,8 @@ if __name__ == "__main__":
         logger.error(f"Fataler Fehler: {e}", exc_info=True)
         send_discord_log(f"❌ **Bot Fehler:** {str(e)}")
         sys.exit(1)
+
+
+
+
+
