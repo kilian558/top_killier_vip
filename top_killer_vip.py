@@ -711,6 +711,23 @@ def process_server(server):
     # Hole aktuelle Map/Match ZUERST
     current_map, match_id = get_current_map(server)
     
+    # Prüfe ob Offensive-Modus (anderes Verhalten, wird übersprungen)
+    is_offensive = False
+    if current_map and isinstance(current_map, str):
+        map_lower = current_map.lower()
+        is_offensive = "_offensive" in map_lower or "offensive" in map_lower
+    
+    if is_offensive:
+        # Offensive-Maps werden übersprungen
+        if state["current_match_id"] != match_id:
+            logger.info(f"[{server['name']}] ⏭️ Offensive-Map erkannt ({current_map}) - VIP-System deaktiviert für dieses Match")
+            state["current_match_id"] = match_id
+            state["match_kills"] = defaultdict(lambda: {"name": "", "kills": 0})
+            state["match_start"] = datetime.now()
+            state["match_rewarded"] = True  # Als "rewarded" markieren, damit nichts verarbeitet wird
+            state["match_end_pending_at"] = None
+        return  # Überspringen
+    
     # Frühes Match-Ende erkennen (Scoreboard-Phase) - VOR Map-Wechsel-Check
     remaining = None
     gamestate = get_gamestate(server)
