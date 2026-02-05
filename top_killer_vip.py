@@ -622,7 +622,10 @@ def process_match_end(server, state: Dict):
                 f"You placed Top Killer #{rank} with {kills} kills and had no VIP. "
                 f"Your VIP has been extended until {expiration}."
             )
-            send_private_message(server, steam_id, player_name, pm_message)
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank}: {player_name} ({steam_id})")
+            pm_success = send_private_message(server, steam_id, player_name, pm_message)
+            if not pm_success:
+                logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
 
             logger.info(
                 f"[{server['name']}] ✓ Platz {rank}: {player_name} ({steam_id}) - {kills} Kills{support_text} - +24h VIP"
@@ -643,7 +646,10 @@ def process_match_end(server, state: Dict):
                 "🏆 MATCH RESULT 🏆\n"
                 f"You placed Top Killer #{rank} with {kills} kills. {reason}"
             )
-            send_private_message(server, steam_id, player_name, pm_message)
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank} (kein VIP): {player_name} ({steam_id})")
+            pm_success = send_private_message(server, steam_id, player_name, pm_message)
+            if not pm_success:
+                logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
 
             discord_msg += (
                 f"• {rank_emoji.get(rank, f'#{rank}')} **{player_name}** - {kills} Kills"
@@ -724,7 +730,10 @@ def process_match_end(server, state: Dict):
                 f"You placed Top Support #{rank} with {points} support points and had no VIP. "
                 f"Your VIP has been extended until {expiration}."
             )
-            send_private_message(server, pid, pname, pm_message)
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Support #{rank}: {pname} ({pid})")
+            pm_success = send_private_message(server, pid, pname, pm_message)
+            if not pm_success:
+                logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {pname} (möglicherweise disconnected)")
 
             logger.info(
                 f"[{server['name']}] ✓ Support Platz {rank}: {pname} ({pid}) - Support: {points} - +24h VIP"
@@ -744,7 +753,10 @@ def process_match_end(server, state: Dict):
                 "🛠️ MATCH RESULT 🛠️\n"
                 f"You placed Top Support #{rank} with {points} support points. {reason}"
             )
-            send_private_message(server, pid, pname, pm_message)
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Support #{rank} (kein VIP): {pname} ({pid})")
+            pm_success = send_private_message(server, pid, pname, pm_message)
+            if not pm_success:
+                logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {pname} (möglicherweise disconnected)")
 
             discord_msg += f"• {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → keine VIP (bereits VIP/ausgenommen)\n"
     
