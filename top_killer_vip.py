@@ -175,6 +175,34 @@ def get_live_scoreboard(server) -> List[Dict]:
         return []
 
 
+def get_live_game_stats(server) -> Dict:
+    """Hole Live-Match-Statistiken (bessere Alternative zu gamestate)"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_live_game_stats",
+            timeout=10
+        )
+        response.raise_for_status()
+        return response.json().get("result", {})
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen der Live-Stats von {server['name']}: {e}")
+        return {}
+
+
+def get_team_view(server) -> Dict:
+    """Hole Team-View mit Live-Support-Punkten"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_team_view",
+            timeout=15
+        )
+        response.raise_for_status()
+        return response.json().get("result", {})
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen der Team-View von {server['name']}: {e}")
+        return {}
+
+
 def get_map_scoreboard(server) -> List[Dict]:
     """Hole Match-Scoreboard (Map) vom Server"""
     try:
@@ -247,10 +275,21 @@ def extract_scoreboard_players(scoreboard) -> List[Dict]:
 
 
 def get_player_support_points(server, player_id: str = None, player_name: str = None, players: List[Dict] | None = None) -> int | None:
-    """Lese Support-Punkte eines einzelnen Spielers aus dem Scoreboard"""
+    """Lese Support-Punkte eines einzelnen Spielers - Priorität: team_view > map_scoreboard > live_scoreboard"""
     if players is None:
-        scoreboard = get_live_scoreboard(server)
-        players = extract_scoreboard_players(scoreboard)
+        # Versuche team_view (beste Quelle für Support)
+        team_view = get_team_view(server)
+        if team_view:
+            players = []
+            for team_key in ("allied", "axis"):
+                team_players = team_view.get(team_key, {}).get("players", [])
+                if isinstance(team_players, list):
+                    players.extend(team_players)
+        
+        # Fallback: Live Scoreboard
+        if not players:
+            scoreboard = get_live_scoreboard(server)
+            players = extract_scoreboard_players(scoreboard)
 
     def normalize_name(name: str) -> str:
         return (name or "").strip().casefold()
@@ -470,19 +509,34 @@ def process_match_end(server, state: Dict):
     discord_msg = f"**🏆 Match beendet - {server['name']}**\n"
     discord_msg += f"Map: {current_map}\n\n"
 
-    # Versuche Map-Scoreboard, dann Live-Scoreboard als Fallback
-    map_scoreboard = get_map_scoreboard(server)
-    if map_scoreboard:
-        logger.info(f"[{server['name']}] ✓ Map-Scoreboard verfügbar")
-        scoreboard_players = extract_scoreboard_players(map_scoreboard)
-    else:
-        logger.warning(f"[{server['name']}] ⚠️ Map-Scoreboard nicht verfügbar - verwende Live-Scoreboard")
+    # Versuche verschiedene Quellen für Spieler-Stats (Priorität: team_view > map_scoreboard > live_scoreboard)
+    scoreboard_players = []
+    
+    # 1. Versuche team_view (enthält live Support-Punkte)
+    team_view = get_team_view(server)
+    if team_view:
+        logger.info(f"[{server['name']}] ✓ Team-View verfügbar (beste Quelle für Support)")
+        for team_key in ("allied", "axis"):
+            team_players = team_view.get(team_key, {}).get("players", [])
+            if isinstance(team_players, list):
+                scoreboard_players.extend(team_players)
+    
+    # 2. Fallback: Map-Scoreboard
+    if not scoreboard_players:
+        map_scoreboard = get_map_scoreboard(server)
+        if map_scoreboard:
+            logger.info(f"[{server['name']}] ✓ Map-Scoreboard verfügbar")
+            scoreboard_players = extract_scoreboard_players(map_scoreboard)
+    
+    # 3. Fallback: Live-Scoreboard (Support meist 0)
+    if not scoreboard_players:
+        logger.warning(f"[{server['name']}] ⚠️ Fallback auf Live-Scoreboard (Support-Punkte ggf. nicht verfügbar)")
         scoreboard_players = extract_scoreboard_players(get_live_scoreboard(server))
     
     # Prüfe ob Support-Punkte verfügbar sind
     support_available = any(_extract_support_points(p) is not None and _extract_support_points(p) > 0 for p in scoreboard_players)
     if not support_available:
-        logger.warning(f"[{server['name']}] ⚠️ Keine Support-Punkte im Scoreboard gefunden (möglicherweise API-Permission fehlt).")
+        logger.warning(f"[{server['name']}] ⚠️ Keine Support-Punkte gefunden (möglicherweise erst nach Match verfügbar).")
 
     awarded_ids: set[str] = set()
 
@@ -729,42 +783,52 @@ def process_server(server):
         return  # Überspringen
     
     # Frühes Match-Ende erkennen (Scoreboard-Phase) - VOR Map-Wechsel-Check
-    remaining = None
-    gamestate = get_gamestate(server)
+    # Verwende get_live_game_stats (bessere API für Match-Infos)
+    live_stats = get_live_game_stats(server)
     
-    # Extrahiere Timer aus Gamestate
-    if isinstance(gamestate, dict):
-        for key in ("remaining_time", "remaining_time_seconds", "remaining_time_sec", "remaining_time_s"):
-            if key in gamestate:
-                try:
-                    remaining = float(gamestate[key])
-                    break
-                except (TypeError, ValueError):
-                    pass
-
-    if remaining is None:
-        remaining = get_round_time_remaining(server)
-
-    # Extrahiere Score aus Gamestate (Allied vs Axis)
+    remaining = None
     allied_score = 0
     axis_score = 0
-    if isinstance(gamestate, dict):
-        # Verschiedene mögliche Score-Felder
-        for allied_key in ("allied_score", "team1_score", "allied", "team1"):
-            if allied_key in gamestate:
-                try:
-                    allied_score = int(gamestate[allied_key])
-                    break
-                except (ValueError, TypeError):
-                    pass
+    
+    # Extrahiere aus live_game_stats (primäre Quelle)
+    if live_stats:
+        remaining = live_stats.get("time_remaining")
+        allied_score = live_stats.get("allied_score", 0)
+        axis_score = live_stats.get("axis_score", 0)
+    
+    # Fallback: gamestate + round_time_remaining
+    if remaining is None:
+        gamestate = get_gamestate(server)
         
-        for axis_key in ("axis_score", "team2_score", "axis", "team2"):
-            if axis_key in gamestate:
-                try:
-                    axis_score = int(gamestate[axis_key])
-                    break
-                except (ValueError, TypeError):
-                    pass
+        if isinstance(gamestate, dict):
+            # Timer
+            for key in ("remaining_time", "remaining_time_seconds", "remaining_time_sec", "remaining_time_s"):
+                if key in gamestate:
+                    try:
+                        remaining = float(gamestate[key])
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            
+            # Score
+            for allied_key in ("allied_score", "team1_score", "allied", "team1"):
+                if allied_key in gamestate:
+                    try:
+                        allied_score = int(gamestate[allied_key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            
+            for axis_key in ("axis_score", "team2_score", "axis", "team2"):
+                if axis_key in gamestate:
+                    try:
+                        axis_score = int(gamestate[axis_key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+        
+        if remaining is None:
+            remaining = get_round_time_remaining(server)
 
     # Match-Ende Bedingungen:
     # 1. Timer bei 0 (Zeit abgelaufen) → 90s Scoreboard startet
