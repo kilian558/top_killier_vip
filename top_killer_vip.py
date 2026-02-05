@@ -258,13 +258,13 @@ def process_match_end(server, state: Dict):
         reverse=True
     )
     
-    # Hole VIP-Liste
-    vip_ids = get_vip_ids(server)
+    # Hole VIP-Listen pro Server (fuer Cross-Server Vergabe)
+    vip_ids_by_server = {s["base_url"]: get_vip_ids(s) for s in servers}
     
     # Filtere Top 5 ohne VIP
     top_killers_no_vip = [
         (steam_id, data) for steam_id, data in sorted_killers
-        if steam_id not in vip_ids
+        if steam_id not in vip_ids_by_server[server["base_url"]]
     ][:5]
     
     if not top_killers_no_vip:
@@ -288,8 +288,19 @@ def process_match_end(server, state: Dict):
         kills = data["kills"]
         hours = vip_hours[rank]
         
-        # Vergebe VIP mit entsprechender Stundenzahl
-        success = add_vip_hours(server, steam_id, player_name, hours)
+        # Vergebe VIP auf allen Servern
+        per_server_success = []
+        for target_server in servers:
+            target_vips = vip_ids_by_server.get(target_server["base_url"], set())
+            if steam_id in target_vips:
+                logger.info(
+                    f"[{server['name']}] {player_name} ({steam_id}) hat bereits VIP auf {target_server['name']}, skip"
+                )
+                per_server_success.append(True)
+                continue
+            per_server_success.append(add_vip_hours(target_server, steam_id, player_name, hours))
+
+        success = all(per_server_success)
         
         # VORERST KEINE PM SENDEN
         # pm_message = (
