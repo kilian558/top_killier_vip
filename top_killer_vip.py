@@ -830,55 +830,27 @@ def process_server(server):
         if remaining is None:
             remaining = get_round_time_remaining(server)
 
-    # Hole Logs ZUERST (um MATCH ENDED zu erkennen)
+    # Hole Logs für Kill-Tracking
     logs = get_historical_logs(server)
     
-    # Prüfe auf MATCH ENDED Event in den neuesten Logs
-    match_ended_detected = False
-    if logs:
-        for log in logs[-20:]:  # Prüfe die letzten 20 Logs
-            # Prüfe alle möglichen Felder
-            log_type = str(log.get("type", "")).upper()
-            log_action = str(log.get("action", "")).upper()
-            log_message = str(log.get("message", "")).upper()
-            log_content = str(log.get("content", "")).upper()
-            
-            # Kombiniere alle Felder zum Durchsuchen
-            full_log = f"{log_type} {log_action} {log_message} {log_content}"
-            
-            # Debug: Log alle MATCH-bezogenen Einträge
-            if "MATCH" in full_log:
-                logger.info(f"[{server['name']}] [DEBUG] Log mit MATCH: type='{log.get('type')}', action='{log.get('action')}', message='{log.get('message', '')[:100]}'")
-            
-            if "MATCH" in full_log and ("END" in full_log or "ENDED" in full_log):
-                match_ended_detected = True
-                logger.info(f"[{server['name']}] 🏁 MATCH ENDED Event erkannt in Logs!")
-                break
-    
-    # Match-Ende Bedingungen (Priorität: Log-Event > Timer > Score)
+    # Match-Ende Erkennung: Scoreboard-Phase bei ≤90s ODER Score 5:x
+    # Regel #1: Timer ≤ 90 Sekunden = Scoreboard-Phase = Match Ende
+    # Regel #2: Score 5:x = Sofortiges Match Ende (startet auch 90s Scoreboard)
     match_ended = False
     end_reason = ""
     
-    if match_ended_detected:
+    if remaining is not None and remaining <= 90 and not state["match_rewarded"]:
         match_ended = True
-        end_reason = "MATCH ENDED Event erkannt"
-    elif remaining is not None and remaining <= 0:
+        end_reason = f"Scoreboard-Phase ({remaining:.0f}s verbleibend, Score {allied_score}:{axis_score})"
+    elif (allied_score >= 5 or axis_score >= 5) and not state["match_rewarded"]:
         match_ended = True
-        end_reason = f"Zeit abgelaufen (Timer ≤ 0, Score {allied_score}:{axis_score})"
-    elif allied_score >= 5 or axis_score >= 5:
-        match_ended = True
-        end_reason = f"Score erreicht ({allied_score}:{axis_score})"
+        end_reason = f"Score 5:x erreicht ({allied_score}:{axis_score})"
     
-    if match_ended and not state["match_rewarded"] and state["current_match_id"]:
-        logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason} - Verarbeite Belohnungen!")
+    if match_ended and state["current_match_id"]:
+        logger.info(f"[{server['name']}] 🏁 Match-Ende erkannt: {end_reason}")
         process_match_end(server, state)
         # WICHTIG: match_id bleibt gleich bis zum Map-Wechsel
         return
-    
-    # Logging für Scoreboard-Phase (noch nicht bei 0/5:0)
-    if remaining is not None and 0 < remaining <= 90 and not state["match_rewarded"] and state.get("match_end_pending_at") is None:
-        state["match_end_pending_at"] = datetime.now(timezone.utc)
-        logger.info(f"[{server['name']}] ⏱️ Bald Scoreboard-Phase ({remaining:.0f}s verbleibend, Score {allied_score}:{axis_score}).")
     
     # Neues Match erkannt (Map-Wechsel)
     if match_id and match_id != state["current_match_id"]:
