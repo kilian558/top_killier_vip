@@ -251,6 +251,20 @@ def get_live_scoreboard(server):
         return None
 
 
+def get_map_scoreboard(server):
+    """Hole Match-Scoreboard (Map) vom Server"""
+    try:
+        response = server["session"].get(
+            f"{server['base_url']}/api/get_map_scoreboard",
+            timeout=15
+        )
+        response.raise_for_status()
+        return response.json().get("result", [])
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Map-Scoreboards von {server['name']}: {e}")
+        return None
+
+
 def extract_scoreboard_players(scoreboard) -> List[Dict]:
     """Extrahiere Spieler-Liste aus unterschiedlichen Scoreboard-Formaten"""
     players: List[Dict] = []
@@ -711,6 +725,17 @@ async def process_server(server, channel):
 
     logger.info(f"[{server['name']}] Anzahl Spieler im Scoreboard: {len(players)}")
     
+    # Support-Daten bevorzugt aus Map-Scoreboard (falls verfÃ¼gbar)
+    support_players = None
+    map_scoreboard = get_map_scoreboard(server)
+    if map_scoreboard:
+        map_players = extract_scoreboard_players(map_scoreboard)
+        if any(_extract_support_points(p) is not None for p in map_players):
+            support_players = map_players
+
+    if support_players is None:
+        support_players = players
+
     for player in players:
         if not isinstance(player, dict):
             continue
@@ -736,17 +761,27 @@ async def process_server(server, channel):
             state["match_kills"][steam_id] = {"name": player_name, "kills": match_kills}
             player_count += 1
 
+    for player in support_players:
+        if not isinstance(player, dict):
+            continue
+        steam_id = player.get("player_id") or player.get("steam_id_64") or player.get("player_id")
+        player_name = player.get("player") or player.get("name", "Unknown")
+        if not steam_id or steam_id == "None":
+            continue
+
         support_points = _extract_support_points(player)
         if support_points is not None:
             state["match_support"][steam_id] = {"name": player_name, "support": support_points}
 
-    if not state["match_support"] and not state.get("support_debug_logged"):
-        if players:
-            sample_keys = list(players[0].keys())
-            sample_support = players[0].get("support")
+    if not state["support_debug_logged"]:
+        sample_source = support_players[0] if support_players else None
+        if sample_source:
+            sample_keys = list(sample_source.keys())
+            sample_support = sample_source.get("support")
             logger.info(
                 f"[{server['name']}] Support-Debug: Beispiel-Keys im Scoreboard: {sample_keys} | "
-                f"support={sample_support} (type={type(sample_support).__name__})"
+                f"support={sample_support} (type={type(sample_support).__name__}) | "
+                f"Quelle={'map' if support_players is map_players else 'live'}"
             )
         state["support_debug_logged"] = True
             
