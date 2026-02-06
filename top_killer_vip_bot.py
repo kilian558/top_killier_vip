@@ -102,6 +102,7 @@ server_states = {
         "last_timer_remaining": None,
         "last_allied_score": 0,
         "last_axis_score": 0,
+        "paused_low_pop": False,
         "live_message": None,  # Discord Message fÃ¼r Live-Updates
         "live_message_id": None,
         "last_update": None,   # Timestamp des letzten Updates
@@ -204,6 +205,7 @@ def load_state():
         state["last_timer_remaining"] = saved.get("last_timer_remaining")
         state["last_allied_score"] = saved.get("last_allied_score", 0)
         state["last_axis_score"] = saved.get("last_axis_score", 0)
+        state["paused_low_pop"] = saved.get("paused_low_pop", False)
         state["live_message_id"] = saved.get("live_message_id")
         state["inactive_since"] = _parse_datetime(saved.get("inactive_since"))
         state["current_map"] = saved.get("current_map")
@@ -238,6 +240,7 @@ def save_state(force: bool = False):
             "last_timer_remaining": state.get("last_timer_remaining"),
             "last_allied_score": state.get("last_allied_score", 0),
             "last_axis_score": state.get("last_axis_score", 0),
+            "paused_low_pop": state.get("paused_low_pop", False),
             "live_message_id": state.get("live_message_id"),
             "inactive_since": _serialize_datetime(state.get("inactive_since")),
             "current_map": state.get("current_map")
@@ -988,6 +991,27 @@ async def process_server(server, channel):
         logger.info(f"[{server['name']}] Scoreboard-Keys: {list(scoreboard.keys())}")
 
     logger.info(f"[{server['name']}] Anzahl Spieler im Scoreboard: {len(players)}")
+
+    if len(players) < 20:
+        if not state.get("paused_low_pop"):
+            state["paused_low_pop"] = True
+            logger.info(f"[{server['name']}] Low-Pop erkannt (<20 Spieler) - Bot pausiert")
+
+            if state.get("live_message"):
+                try:
+                    await state["live_message"].delete()
+                    logger.info(f"[{server['name']}] Live-Message geloescht (Low-Pop)")
+                except Exception as e:
+                    logger.error(f"[{server['name']}] Fehler beim Loeschen der Live-Message: {e}")
+                finally:
+                    state["live_message"] = None
+                    state["live_message_id"] = None
+
+        return
+
+    if state.get("paused_low_pop"):
+        state["paused_low_pop"] = False
+        logger.info(f"[{server['name']}] Spielerzahl >=20 - Bot wieder aktiv")
     
     # Support-Daten bevorzugt aus Map-Scoreboard (falls verfÃ¼gbar)
     support_players = None
@@ -1136,7 +1160,12 @@ async def update_live_stats():
             logger.info(f"[{server['name']}] Match-Status: ID={state['current_match_id']}, Rewarded={state['match_rewarded']}, Kills={len(state['match_kills'])}")
             
             # Nur Live-Update wenn Match lÃ¤uft und nicht belohnt
-            if state["current_match_id"] and not state["match_rewarded"] and not state.get("inactive_since"):
+            if (
+                state["current_match_id"]
+                and not state["match_rewarded"]
+                and not state.get("inactive_since")
+                and not state.get("paused_low_pop")
+            ):
                 current_map = state.get("current_map") or "Unknown"
                 embed = create_live_embed(server, state, current_map)
                 
