@@ -520,6 +520,33 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
         return False
 
 
+def send_private_message(server, player_id: str, player_name: str, message: str) -> bool:
+    """Sende private Nachricht an Spieler"""
+    try:
+        payload = {
+            "player_id": player_id,
+            "message": message,
+            "by": "Top Killer VIP Bot",
+            "player_name": player_name
+        }
+        response = server["session"].post(
+            f"{server['base_url']}/api/message_player",
+            json=payload,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"✓ PM gesendet an {player_name} ({player_id}) auf {server['name']}")
+            return True
+        else:
+            logger.warning(f"PM-Fehler für {player_name}: {response.status_code} - {response.text[:100]}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Fehler beim Senden der PM an {player_name}: {e}")
+        return False
+
+
 def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     """Erstelle Live-Update Embed"""
     match_kills = state["match_kills"]
@@ -716,6 +743,12 @@ async def process_match_end(server, state: Dict, channel):
         if steam_id not in vip_ids_by_server[server["base_url"]]
     ][:3]
     
+    # Auch Top 3 MIT VIP für Benachrichtigungen sammeln
+    top_killers_with_vip = [
+        (steam_id, data) for steam_id, data in sorted_killers[:3]
+        if steam_id in vip_ids_by_server[server["base_url"]]
+    ]
+    
     if not top_killers_no_vip:
         logger.info(f"[{server['name']}] Alle Top-Killer haben bereits VIP.")
     
@@ -747,6 +780,37 @@ async def process_match_end(server, state: Dict, channel):
         rank_emoji = {1: EMOJI_MEDAL_1, 2: EMOJI_MEDAL_2, 3: EMOJI_MEDAL_3}
         status = EMOJI_CHECK if success else EMOJI_CROSS
         logger.info(f"[{server['name']}] {status} Platz {rank}: {player_name} ({steam_id}) - {kills} Kills - +{hours}h VIP")
+        
+        # Sende Nachricht an Spieler
+        if success:
+            # Berechne Ablaufdatum für die Nachricht
+            expiration_date = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M UTC")
+            pm_message = (
+                "🏆 CONGRATULATIONS! 🏆\n"
+                f"You placed Top Killer #{rank} with {kills} kills and had no VIP. "
+                f"Your VIP has been extended until {expiration_date}."
+            )
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank}: {player_name} ({steam_id})")
+            pm_success = send_private_message(server, steam_id, player_name, pm_message)
+            if not pm_success:
+                logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
+    
+    # Benachrichtige auch Top-Killer die bereits VIP haben
+    for idx, (steam_id, data) in enumerate(top_killers_with_vip):
+        player_name = data["name"]
+        kills = data["kills"]
+        # Finde den echten Rang unter allen Killern
+        rank = next(i for i, (sid, _) in enumerate(sorted_killers, 1) if sid == steam_id)
+        
+        pm_message = (
+            "🏆 MATCH RESULT 🏆\n"
+            f"You placed Top Killer #{rank} with {kills} kills. "
+            "No VIP was granted because you already have VIP."
+        )
+        logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank} (bereits VIP): {player_name} ({steam_id})")
+        pm_success = send_private_message(server, steam_id, player_name, pm_message)
+        if not pm_success:
+            logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
     
     # "Freeze" die Live-Message mit finalem Embed
     current_map, _ = get_current_map(server)
