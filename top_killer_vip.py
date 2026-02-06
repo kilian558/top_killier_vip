@@ -635,25 +635,22 @@ def process_match_end(server, state: Dict):
                 f"{support_text} → +24h VIP\n"
             )
         else:
-            if has_vip:
-                reason = "No VIP was granted because you already have VIP."
-            elif is_excluded:
-                reason = "No VIP was granted."
-            else:
-                reason = "No VIP was granted."
+            reason = ""
+            if is_excluded:
+                reason = ""
 
             pm_message = (
                 "🏆 MATCH RESULT 🏆\n"
-                f"You placed Top Killer #{rank} with {kills} kills. {reason}"
+                f"You placed Top Killer #{rank} with {kills} kills."
             )
-            logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank} (kein VIP): {player_name} ({steam_id})")
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank}: {player_name} ({steam_id})")
             pm_success = send_private_message(server, steam_id, player_name, pm_message)
             if not pm_success:
                 logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
 
             discord_msg += (
                 f"• {rank_emoji.get(rank, f'#{rank}')} **{player_name}** - {kills} Kills"
-                f"{support_text} → keine VIP (bereits VIP/ausgenommen)\n"
+                f"{support_text} → keine Belohnung\n"
             )
 
     # Top Support Benachrichtigungen (bis 2 VIP vergeben)
@@ -740,25 +737,16 @@ def process_match_end(server, state: Dict):
             )
             discord_msg += f"✓ {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → +24h VIP\n"
         else:
-            if has_vip:
-                reason = "No VIP was granted because you already have VIP."
-            elif pid in awarded_ids:
-                reason = "No VIP was granted because you already received a VIP as Top Killer."
-            elif is_excluded:
-                reason = "No VIP was granted."
-            else:
-                reason = "No VIP was granted."
-
             pm_message = (
                 "🛠️ MATCH RESULT 🛠️\n"
-                f"You placed Top Support #{rank} with {points} support points. {reason}"
+                f"You placed Top Support #{rank} with {points} support points."
             )
-            logger.info(f"[{server['name']}] 📨 Sende PM an Top Support #{rank} (kein VIP): {pname} ({pid})")
+            logger.info(f"[{server['name']}] 📨 Sende PM an Top Support #{rank}: {pname} ({pid})")
             pm_success = send_private_message(server, pid, pname, pm_message)
             if not pm_success:
                 logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {pname} (möglicherweise disconnected)")
 
-            discord_msg += f"• {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → keine VIP (bereits VIP/ausgenommen)\n"
+            discord_msg += f"• {rank_emoji.get(rank, f'#{rank}')} **{pname}** - Support: {points} → keine Belohnung\n"
     
     # Zeige alle Top 10 zur Info
     discord_msg += "\n**📊 Top 10 Gesamt:**\n"
@@ -813,10 +801,16 @@ def process_server(server):
     axis_score = 0
     
     # Extrahiere aus live_game_stats (primäre Quelle)
+    def _to_int(value: object) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
     if live_stats:
         remaining = live_stats.get("time_remaining") or live_stats.get("remaining_time")
-        allied_score = live_stats.get("allied_score", 0) or live_stats.get("allied", {}).get("score", 0)
-        axis_score = live_stats.get("axis_score", 0) or live_stats.get("axis", {}).get("score", 0)
+        allied_score = _to_int(live_stats.get("allied_score", 0) or live_stats.get("allied", {}).get("score", 0))
+        axis_score = _to_int(live_stats.get("axis_score", 0) or live_stats.get("axis", {}).get("score", 0))
         logger.info(f"[{server['name']}] 🔍 Live Stats: Timer={remaining}, Score {allied_score}:{axis_score}")
     
     # Fallback: gamestate (gibt Sekunden als Float-String zurück)
@@ -841,8 +835,8 @@ def process_server(server):
             
             # Score aus gamestate
             if allied_score == 0 and axis_score == 0:
-                allied_score = gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0)
-                axis_score = gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0)
+                allied_score = _to_int(gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0))
+                axis_score = _to_int(gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0))
         
         # Letzte Fallback: round_time_remaining
         if remaining is None:

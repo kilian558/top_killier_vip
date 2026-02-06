@@ -406,6 +406,66 @@ def get_match_timer_and_score(server) -> Tuple[Optional[float], int, int]:
     allied_score = live_stats.get("allied_score", 0) or live_stats.get("allied", {}).get("score", 0)
     axis_score = live_stats.get("axis_score", 0) or live_stats.get("axis", {}).get("score", 0)
 
+    def _to_int(value: object) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+    allied_score = _to_int(allied_score)
+    axis_score = _to_int(axis_score)
+
+    def _coerce_timer(value: Optional[object]) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            pass
+        try:
+            parts = str(value).strip().split(":")
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            return None
+        return None
+
+    stats_block = live_stats.get("stats")
+    if stats_block and (timer_remaining is None or (allied_score == 0 and axis_score == 0)):
+        if isinstance(stats_block, dict):
+            timer_remaining = _coerce_timer(
+                timer_remaining or
+                stats_block.get("time_remaining") or
+                stats_block.get("remaining_time") or
+                stats_block.get("raw_time_remaining")
+            )
+            if allied_score == 0 and axis_score == 0:
+                allied_score = stats_block.get("allied_score", 0) or stats_block.get("score_allied", 0)
+                axis_score = stats_block.get("axis_score", 0) or stats_block.get("score_axis", 0)
+                if allied_score == 0 and axis_score == 0:
+                    allied_score = stats_block.get("allied", {}).get("score", 0)
+                    axis_score = stats_block.get("axis", {}).get("score", 0)
+        elif isinstance(stats_block, list):
+            for item in stats_block:
+                if not isinstance(item, dict):
+                    continue
+                if timer_remaining is None:
+                    timer_remaining = _coerce_timer(
+                        item.get("time_remaining") or
+                        item.get("remaining_time") or
+                        item.get("raw_time_remaining")
+                    )
+                if allied_score == 0 and axis_score == 0:
+                    allied_score = item.get("allied_score", 0) or item.get("score_allied", 0)
+                    axis_score = item.get("axis_score", 0) or item.get("score_axis", 0)
+                    if allied_score == 0 and axis_score == 0:
+                        allied_score = item.get("allied", {}).get("score", 0)
+                        axis_score = item.get("axis", {}).get("score", 0)
+                if timer_remaining is not None and (allied_score > 0 or axis_score > 0):
+                    break
+
     if timer_remaining is None or (allied_score == 0 and axis_score == 0):
         gamestate = get_gamestate(server)
         if isinstance(gamestate, dict):
@@ -417,21 +477,11 @@ def get_match_timer_and_score(server) -> Tuple[Optional[float], int, int]:
                 )
 
                 if timer_str:
-                    try:
-                        timer_remaining = float(timer_str)
-                    except ValueError:
-                        try:
-                            parts = str(timer_str).strip().split(":")
-                            if len(parts) == 3:
-                                timer_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-                            elif len(parts) == 2:
-                                timer_remaining = int(parts[0]) * 60 + int(parts[1])
-                        except Exception:
-                            timer_remaining = None
+                    timer_remaining = _coerce_timer(timer_str)
 
             if allied_score == 0 and axis_score == 0:
-                allied_score = gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0)
-                axis_score = gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0)
+                allied_score = _to_int(gamestate.get("allied_score", 0) or gamestate.get("score_allied", 0))
+                axis_score = _to_int(gamestate.get("axis_score", 0) or gamestate.get("score_axis", 0))
 
     if timer_remaining is None:
         timer_remaining = get_round_time_remaining(server)
@@ -744,11 +794,9 @@ def create_final_embed(server, state: Dict, current_map: str, top_winners: List)
     
     if sorted_killers:
         top_text = ""
-        vip_ids = get_vip_ids(server)
         for rank, (steam_id, data) in enumerate(sorted_killers, 1):
-            has_vip = EMOJI_VIP if steam_id in vip_ids else ""
-            top_text += f"{rank}. **{data['name'][:25]}** - {data['kills']} Kills {has_vip}\n"
-        
+            top_text += f"{rank}. **{data['name'][:25]}** - {data['kills']} Kills\n"
+
         embed.add_field(name=f"{EMOJI_BAR_CHART} Top 10 Gesamt", value=top_text, inline=False)
     
     embed.set_footer(text="Match abgeschlossen")
@@ -791,8 +839,7 @@ async def process_match_end(server, state: Dict, channel):
         if lifetime:
             pm_message = (
                 "🏆 MATCH RESULT 🏆\n"
-                f"You placed Top Killer #{rank} with {kills} kills. "
-                "You already have Lifetime VIP, so no VIP was added."
+                f"You placed Top Killer #{rank} with {kills} kills."
             )
             logger.info(f"[{server['name']}] 📨 Sende PM an Lifetime VIP Top Killer #{rank}: {player_name} ({steam_id})")
             pm_success = send_private_message(server, steam_id, player_name, pm_message)
