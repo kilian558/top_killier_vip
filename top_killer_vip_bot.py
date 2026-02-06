@@ -800,7 +800,11 @@ async def process_match_end(server, state: Dict, channel):
         player_name = data["name"]
         kills = data["kills"]
         # Finde den echten Rang unter allen Killern
-        rank = next(i for i, (sid, _) in enumerate(sorted_killers, 1) if sid == steam_id)
+        try:
+            rank = next(i for i, (sid, _) in enumerate(sorted_killers, 1) if sid == steam_id)
+        except StopIteration:
+            logger.warning(f"[{server['name']}] Konnte Rang für {player_name} ({steam_id}) nicht finden")
+            continue
         
         pm_message = (
             "🏆 MATCH RESULT 🏆\n"
