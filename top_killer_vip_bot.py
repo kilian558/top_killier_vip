@@ -653,6 +653,10 @@ def add_vip_hours(server, steam_id: str, player_name: str, hours: int) -> bool:
         return False
 
 
+async def _run_blocking(func, *args, **kwargs):
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
 def send_private_message(server, player_id: str, player_name: str, message: str) -> bool:
     """Sende private Nachricht an Spieler"""
     try:
@@ -761,7 +765,7 @@ def create_live_embed(server, state: Dict, current_map: str) -> discord.Embed:
     else:
         embed.add_field(name="Top 10 Support", value="Support-Punkte sind erst nach Match-Ende verfÃ¼gbar.", inline=False)
     
-    embed.set_footer(text=f"{EMOJI_REFRESH} Auto-Update alle 15 Sekunden")
+    embed.set_footer(text=f"{EMOJI_REFRESH} Auto-Update alle 5 Sekunden")
     
     return embed
 
@@ -842,7 +846,7 @@ async def process_match_end(server, state: Dict, channel):
                 f"You placed Top Killer #{rank} with {kills} kills."
             )
             logger.info(f"[{server['name']}] 📨 Sende PM an Lifetime VIP Top Killer #{rank}: {player_name} ({steam_id})")
-            pm_success = send_private_message(server, steam_id, player_name, pm_message)
+            pm_success = await _run_blocking(send_private_message, server, steam_id, player_name, pm_message)
             if not pm_success:
                 logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
             continue
@@ -852,10 +856,12 @@ async def process_match_end(server, state: Dict, channel):
             expiration_dt.strftime("%Y-%m-%d %H:%M UTC") if expiration_dt else "unknown time"
         )
 
-        per_server_success = []
-        for target_server in servers:
-            per_server_success.append(add_vip_hours(target_server, steam_id, player_name, hours_per_award))
-
+        per_server_success = await asyncio.gather(
+            *[
+                _run_blocking(add_vip_hours, target_server, steam_id, player_name, hours_per_award)
+                for target_server in servers
+            ]
+        )
         success = all(per_server_success)
         top_winners.append((rank, steam_id, data, hours_per_award, success))
 
@@ -872,7 +878,7 @@ async def process_match_end(server, state: Dict, channel):
                 f"Your VIP has been extended until {expiration_text}."
             )
             logger.info(f"[{server['name']}] 📨 Sende PM an Top Killer #{rank}: {player_name} ({steam_id})")
-            pm_success = send_private_message(server, steam_id, player_name, pm_message)
+            pm_success = await _run_blocking(send_private_message, server, steam_id, player_name, pm_message)
             if not pm_success:
                 logger.warning(f"[{server['name']}] ⚠️ PM konnte nicht gesendet werden an {player_name} (möglicherweise disconnected)")
     
@@ -1105,9 +1111,9 @@ async def process_server(server, channel):
             return
 
 
-@tasks.loop(seconds=15)
+@tasks.loop(seconds=5)
 async def update_live_stats():
-    """Update Live-Stats alle 15 Sekunden"""
+    """Update Live-Stats alle 5 Sekunden"""
     if shutdown_requested:
         update_live_stats.cancel()
         return
